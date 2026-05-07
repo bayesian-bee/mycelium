@@ -10,21 +10,9 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 //   nitrogen (from nitrogen-fixing patches / decay)
 //   spore   (cultural / "people" analog — spreads identity)
 //
-// Node biomes (terrain) determine which "species" you can grow:
-//   sunny    -> Cordyceps Grove (sugar producer; needs water+mineral)
-//              -> Sun Lichen (sugar producer; needs water)
-//   damp     -> Marsh Veil (water producer; needs sugar)
-//              -> Bog Cap (water producer; needs nitrogen)
-//   rocky    -> Stonebreaker (mineral producer; needs water)
-//              -> Crystal Cap (mineral producer; needs sugar+nitrogen)
-//   loamy    -> Decay Court (nitrogen producer; needs sugar)
-//              -> Spore Hall (spore producer; needs sugar+water)
-//   any      -> Hyphal Lab (science; needs any one resource)
-//
-// Tiers: Dormant -> Sprouting -> Thriving -> Flourishing
-//   Sprouting:    all needs satisfied
-//   Thriving:     all needs satisfied + 2 outputs delivered
-//   Flourishing:  all needs + 3 outputs + 3 connections to thriving neighbors
+// Each patch has a finite production capacity: 1 or 2 units of its
+// resource per cycle. No two species form a closed dyad — every
+// self-sustaining loop requires at least three patches.
 //
 // Each hypha (edge) carries 1 unit. Threads cannot cross.
 
@@ -33,13 +21,13 @@ const RESOURCES = {
   sugar:    { glyph: '☀', color: '#f4c95d', name: 'sugar' },
   water:    { glyph: '◉', color: '#7fb8d6', name: 'water' },
   mineral:  { glyph: '◆', color: '#b8a890', name: 'mineral' },
-  nitrogen: { glyph: '✦', color: '#a8d49a', name: 'nitrogen' },
+  nitrogen: { glyph: '✿', color: '#a8d49a', name: 'nitrogen' },
   spore:    { glyph: '✺', color: '#d4a8d4', name: 'spore' },
 };
 
 const SPECIES = {
   cordyceps:   { biomes: ['sunny'],         name: 'Cordyceps Grove', produces: 'sugar',    needs: ['water', 'mineral'] },
-  sunlichen:   { biomes: ['sunny'],         name: 'Sun Lichen',      produces: 'sugar',    needs: ['water'] },
+  sunlichen:   { biomes: ['sunny'],         name: 'Sun Lichen',      produces: 'sugar',    needs: ['mineral'] },
   marshveil:   { biomes: ['damp'],          name: 'Marsh Veil',      produces: 'water',    needs: ['sugar'] },
   bogcap:      { biomes: ['damp'],          name: 'Bog Cap',         produces: 'water',    needs: ['nitrogen'] },
   stonebreak:  { biomes: ['rocky'],         name: 'Stonebreaker',    produces: 'mineral',  needs: ['water'] },
@@ -101,6 +89,7 @@ function generateMap(seed) {
         species: null,        // key from SPECIES once colonized
         produces: null,       // resource key
         needs: [],            // [resourceKey, ...]
+        capacity: rng() < 0.5 ? 1 : 2, // max units of its resource produced per cycle
         explored: false,
         // wobble for hand-drawn feel
         jitter: rng() * Math.PI * 2,
@@ -140,6 +129,9 @@ function defaultState(seed) {
 function computeNetwork(state) {
   const result = {};
   const nodes = state.map.nodes;
+  // Per-edge flow: { fwd, rev } — resource keys (or null) for the
+  // from->to and to->from directions. Indices match state.edges.
+  const edgeFlows = state.edges.map(() => ({ fwd: null, rev: null }));
   for (const n of nodes) {
     result[n.id] = {
       imports: [],            // list of resources actually delivered to this node
@@ -151,39 +143,41 @@ function computeNetwork(state) {
   }
 
   // For each edge, determine what (if anything) flows in each direction.
-  // Slipways rule: 1 unit per slipway. We model each edge as bidirectional —
-  // each end can independently send its produced resource to the other end if needed.
-  for (const e of state.edges) {
+  // Each end can independently send its produced resource to the other end if
+  // needed, but a producer's exports are capped by its node capacity.
+  for (let i = 0; i < state.edges.length; i++) {
+    const e = state.edges[i];
     const A = nodes[e.from], B = nodes[e.to];
     result[A.id].neighbors.add(B.id);
     result[B.id].neighbors.add(A.id);
 
-    // A -> B: A produces something B needs (and B hasn't already got that resource)
     if (A.species && B.species) {
       const aProd = A.produces;
-      const bNeeds = B.needs;
-      if (aProd && bNeeds.includes(aProd) && !result[B.id].imports.includes(aProd)) {
-        // For Hyphal Lab ('any'), accept any resource as long as not already imported
+      const bAccepts = aProd && (B.needs.includes(aProd) || (B.species === 'hyphallab' && aProd !== 'science'));
+      if (bAccepts
+          && !result[B.id].imports.includes(aProd)
+          && result[A.id].exports.length < (A.capacity ?? 1)) {
         result[B.id].imports.push(aProd);
         result[A.id].exports.push(aProd);
-      } else if (B.species === 'hyphallab' && aProd && aProd !== 'science' && !result[B.id].imports.includes(aProd)) {
-        result[B.id].imports.push(aProd);
-        result[A.id].exports.push(aProd);
+        edgeFlows[i].fwd = aProd;
       }
-      // B -> A
       const bProd = B.produces;
-      const aNeeds = A.needs;
-      if (bProd && aNeeds.includes(bProd) && !result[A.id].imports.includes(bProd)) {
+      const aAccepts = bProd && (A.needs.includes(bProd) || (A.species === 'hyphallab' && bProd !== 'science'));
+      if (aAccepts
+          && !result[A.id].imports.includes(bProd)
+          && result[B.id].exports.length < (B.capacity ?? 1)) {
         result[A.id].imports.push(bProd);
         result[B.id].exports.push(bProd);
-      } else if (A.species === 'hyphallab' && bProd && bProd !== 'science' && !result[A.id].imports.includes(bProd)) {
-        result[A.id].imports.push(bProd);
-        result[B.id].exports.push(bProd);
+        edgeFlows[i].rev = bProd;
       }
     }
   }
 
-  // Compute tier per node (first pass — flourishing finalized in second pass)
+  // Tier thresholds tuned for the capacity-1/2 economy:
+  //   Sprouting   — needs satisfied
+  //   Thriving    — needs satisfied + at least one export delivered
+  //   Flourishing — satisfied + 2 exports + 2 imports + 2 thriving neighbors
+  //                 (only reachable by 2-need species on capacity-2 patches)
   for (const n of nodes) {
     if (!n.species) { result[n.id].tier = 0; continue; }
     const r = result[n.id];
@@ -193,22 +187,22 @@ function computeNetwork(state) {
     });
     r.satisfied = needsMet;
     let tier = 0;
-    if (needsMet) tier = 1; // Sprouting
-    if (needsMet && r.exports.length >= 2 && r.imports.length >= 2) tier = 2; // Thriving (provisional flourishing in pass 2)
+    if (needsMet) tier = 1;
+    if (needsMet && r.exports.length >= 1) tier = 2;
     r.tier = tier;
   }
-  // Second pass: promote thriving -> flourishing if 3 in/out and 3 thriving neighbors
   for (const n of nodes) {
     if (!n.species) continue;
     const r = result[n.id];
     if (r.tier < 2) continue;
-    if (r.satisfied && r.exports.length >= 3 && r.imports.length >= 3) {
+    if (r.satisfied && r.exports.length >= 2 && r.imports.length >= 2) {
       let thrivingNeighbors = 0;
       for (const nb of r.neighbors) if (result[nb].tier >= 2) thrivingNeighbors++;
-      if (thrivingNeighbors >= 3) r.tier = 3;
+      if (thrivingNeighbors >= 2) r.tier = 3;
     }
   }
 
+  result.edgeFlows = edgeFlows;
   return result;
 }
 
@@ -373,6 +367,19 @@ function NodeGraphic({ node, netInfo, isSelected, isHovered, isPendingFrom, hove
           {node.biome === 'sunny' ? '☀' : node.biome === 'damp' ? '◉' : node.biome === 'rocky' ? '◆' : '✦'}
         </text>
       )}
+      {/* capacity dots (richness of the patch) */}
+      {Array.from({ length: node.capacity || 1 }).map((_, i) => {
+        const cap = node.capacity || 1;
+        const offset = (i - (cap - 1) / 2) * 5;
+        const dotColor = colonized
+          ? (node.produces === 'science' ? '#e8c46b' : RESOURCES[node.produces]?.color)
+          : biomeColor;
+        return (
+          <circle key={`cap-${i}`}
+            cx={node.x + offset} cy={node.y + radius - 7}
+            r={1.6} fill={dotColor} opacity={0.85} />
+        );
+      })}
       {/* interaction ring */}
       {overlayStroke && (
         <circle cx={node.x} cy={node.y} r={radius + 4}
@@ -385,7 +392,7 @@ function NodeGraphic({ node, netInfo, isSelected, isHovered, isPendingFrom, hove
   );
 }
 
-function EdgeGraphic({ from, to, net, animated }) {
+function EdgeGraphic({ from, to, flow }) {
   // Stylized hypha — wavy path with two thin offset strokes
   const dx = to.x - from.x, dy = to.y - from.y;
   const len = Math.hypot(dx, dy);
@@ -396,19 +403,10 @@ function EdgeGraphic({ from, to, net, animated }) {
   const mid2y = from.y + dy * 0.66 + ny * -4 * Math.sin(to.jitter);
   const path = `M ${from.x} ${from.y} C ${mid1x} ${mid1y}, ${mid2x} ${mid2y}, ${to.x} ${to.y}`;
 
-  // Determine resources flowing
+  // Per-edge flow is precomputed in computeNetwork (respecting capacity caps).
   const resources = [];
-  if (from.species && to.species) {
-    if (from.produces && to.needs.includes(from.produces)) resources.push({ res: from.produces, dir: 'fwd' });
-    if (to.produces && from.needs.includes(to.produces)) resources.push({ res: to.produces, dir: 'rev' });
-    // hyphal lab catches anything
-    if (to.species === 'hyphallab' && from.produces && from.produces !== 'science' && !resources.find(r => r.res === from.produces)) {
-      resources.push({ res: from.produces, dir: 'fwd' });
-    }
-    if (from.species === 'hyphallab' && to.produces && to.produces !== 'science' && !resources.find(r => r.res === to.produces)) {
-      resources.push({ res: to.produces, dir: 'rev' });
-    }
-  }
+  if (flow?.fwd) resources.push({ res: flow.fwd, dir: 'fwd' });
+  if (flow?.rev) resources.push({ res: flow.rev, dir: 'rev' });
 
   return (
     <g>
@@ -447,7 +445,7 @@ function PreviewEdge({ from, to, valid }) {
 }
 
 // ---------- In-map floating menu ----------
-function PatchMenu({ state, setState, svgRef, containerRef, pan, pushHistory }) {
+function PatchMenu({ state, setState, svgRef, containerRef, pan }) {
   const [pos, setPos] = React.useState(null);
   const node = state.selectedNode !== null ? state.map.nodes[state.selectedNode] : null;
   const isVisible = node && !node.species;
@@ -490,7 +488,6 @@ function PatchMenu({ state, setState, svgRef, containerRef, pan, pushHistory }) 
       setState(st => ({ ...st, log: ['Not enough nutrients to grow.', ...st.log].slice(0, 6) }));
       return;
     }
-    pushHistory();
     setState(st => {
       const nodes = st.map.nodes.map((n, i) =>
         i === node.id ? { ...n, species: key, produces: s.produces, needs: [...s.needs] } : n
@@ -545,7 +542,7 @@ function PatchMenu({ state, setState, svgRef, containerRef, pan, pushHistory }) 
     <>
       <div className="patch-menu" style={{ left: x, top: y, width: W }}>
         <div className="patch-menu-head">
-          <span>{node.biome} · 15n</span>
+          <span>{node.biome} · ×{node.capacity}/cycle · 15n</span>
           <button onClick={() => setState(st => ({ ...st, selectedNode: null }))}>×</button>
         </div>
         {options.map(([key, s]) => {
@@ -580,7 +577,7 @@ function PatchMenu({ state, setState, svgRef, containerRef, pan, pushHistory }) 
 }
 
 // ---------- Side panel: node details / actions ----------
-function NodePanel({ state, setState, net, onClose, pushHistory }) {
+function NodePanel({ state, setState, net, onClose }) {
   const node = state.map.nodes[state.selectedNode];
   if (!node) return null;
   const r = net[node.id];
@@ -596,7 +593,6 @@ function NodePanel({ state, setState, net, onClose, pushHistory }) {
       setState(st => ({ ...st, log: ['Not enough nutrients to grow.', ...st.log].slice(0, 6) }));
       return;
     }
-    pushHistory();
     setState(st => {
       const nodes = st.map.nodes.map((n, i) =>
         i === node.id
@@ -638,7 +634,12 @@ function NodePanel({ state, setState, net, onClose, pushHistory }) {
         <>
           <div className="kv">
             <span>produces</span>
-            <span><ResourceGlyph res={node.produces} size={16} /> {node.produces}</span>
+            <span>
+              <ResourceGlyph res={node.produces} size={16} /> {node.produces}
+              <span style={{ color: '#7a6f5e', fontFamily: 'JetBrains Mono, monospace', fontSize: 10, marginLeft: 8 }}>
+                ×{node.capacity}/cycle
+              </span>
+            </span>
           </div>
           <div className="kv">
             <span>needs</span>
@@ -669,7 +670,9 @@ function NodePanel({ state, setState, net, onClose, pushHistory }) {
         </>
       ) : (
         <>
-          <div className="hint">Choose a species to cultivate (cost: 15 nutrients).</div>
+          <div className="hint">
+            Yields <span style={{ color: '#d8cfbf' }}>×{node.capacity}</span> per cycle. Choose a species to cultivate (cost: 15 nutrients).
+          </div>
           <div className="species-grid">
             {colonizeOptions.map(([key, s]) => (
               <button key={key} className="species-card"
@@ -739,39 +742,52 @@ function HelpModal({ onClose }) {
             <circle cx="95" cy="120" r="26" fill="#d4b86a" opacity="0.18" />
             <circle cx="95" cy="120" r="22" fill="#1f1a16" stroke="#5a5048" strokeWidth="1.8" />
             <text x="95" y="125" textAnchor="middle" fontSize="16" fill="#d4b86a" opacity="0.8">☀</text>
-            <text x="95" y="180" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontStyle="italic" fontSize="13" fill="#8a7f6e">sunny patch</text>
-            <text x="95" y="198" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">click to inspect</text>
+            <text x="95" y="180" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="13" fill="#8a7f6e">sunny patch</text>
+            <text x="95" y="198" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">click to inspect</text>
 
             {/* arrow */}
             <path d="M 140 120 L 195 120" stroke="#5a4f42" strokeWidth="1.5" markerEnd="url(#arr)" fill="none" />
 
-            {/* Step 2: colonized — Sun Lichen needs water, makes sugar */}
-            <text x="284" y="80" textAnchor="middle" fontSize="11" fill="#7fb8d6" opacity="0.9" style={{ filter: 'drop-shadow(0 0 2px #7fb8d6aa)' }}>◉</text>
+            {/* Step 2: colonized — Sun Lichen needs mineral, makes sugar */}
+            <text x="284" y="80" textAnchor="middle" fontSize="11" fill="#b8a890" opacity="0.9" style={{ filter: 'drop-shadow(0 0 2px #b8a89088)' }}>◆</text>
             <circle cx="290" cy="120" r="26" fill="#d4b86a" opacity="0.18" />
             <circle cx="290" cy="120" r="22" fill="#1f1a16" stroke="#7a9c6a" strokeWidth="2" />
             <text x="290" y="126" textAnchor="middle" fontSize="22" fill="#f4c95d" style={{ filter: 'drop-shadow(0 0 4px #f4c95d88)' }}>☀</text>
-            <text x="290" y="180" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontStyle="italic" fontSize="13" fill="#e8c46b">Sun Lichen</text>
-            <text x="290" y="198" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">needs ◉ · makes ☀</text>
+            <text x="290" y="180" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="13" fill="#e8c46b">Sun Lichen</text>
+            <text x="290" y="198" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">needs ◆ · makes ☀</text>
 
             {/* arrow */}
             <path d="M 335 120 L 390 120" stroke="#5a4f42" strokeWidth="1.5" markerEnd="url(#arr)" fill="none" />
 
-            {/* Step 3: connected pair (Sun Lichen ↔ Marsh Veil) */}
-            <circle cx="445" cy="120" r="22" fill="#1f1a16" stroke="#9ec48a" strokeWidth="2" />
-            <text x="445" y="126" textAnchor="middle" fontSize="22" fill="#f4c95d" style={{ filter: 'drop-shadow(0 0 4px #f4c95d88)' }}>☀</text>
-            <circle cx="525" cy="120" r="22" fill="#1f1a16" stroke="#9ec48a" strokeWidth="2" />
-            <text x="525" y="126" textAnchor="middle" fontSize="22" fill="#7fb8d6" style={{ filter: 'drop-shadow(0 0 4px #7fb8d688)' }}>◉</text>
+            {/* Step 3: connected triangle (Sun Lichen, Marsh Veil, Stonebreaker) */}
+            {/* Sun Lichen (top) */}
+            <circle cx="485" cy="95" r="18" fill="#1f1a16" stroke="#9ec48a" strokeWidth="2" />
+            <text x="485" y="101" textAnchor="middle" fontSize="18" fill="#f4c95d" style={{ filter: 'drop-shadow(0 0 4px #f4c95d88)' }}>☀</text>
+            {/* Marsh Veil (bottom-left) */}
+            <circle cx="450" cy="148" r="18" fill="#1f1a16" stroke="#9ec48a" strokeWidth="2" />
+            <text x="450" y="154" textAnchor="middle" fontSize="18" fill="#7fb8d6" style={{ filter: 'drop-shadow(0 0 4px #7fb8d688)' }}>◉</text>
+            {/* Stonebreaker (bottom-right) */}
+            <circle cx="520" cy="148" r="18" fill="#1f1a16" stroke="#9ec48a" strokeWidth="2" />
+            <text x="520" y="154" textAnchor="middle" fontSize="18" fill="#b8a890" style={{ filter: 'drop-shadow(0 0 4px #b8a89088)' }}>◆</text>
 
-            {/* hypha */}
-            <path d="M 467 120 Q 485 110 503 120" stroke="#5a4f42" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+            {/* Sun Lichen → Marsh Veil (sugar) */}
+            <path d="M 477 110 L 458 134" stroke="#5a4f42" strokeWidth="2.5" fill="none" strokeLinecap="round" />
             <circle r="3" fill="#f4c95d" style={{ filter: 'drop-shadow(0 0 4px #f4c95d)' }}>
-              <animateMotion dur="2.5s" repeatCount="indefinite" path="M 467 120 Q 485 110 503 120" />
+              <animateMotion dur="3s" repeatCount="indefinite" path="M 477 110 L 458 134" />
             </circle>
+            {/* Marsh Veil → Stonebreaker (water) */}
+            <path d="M 468 148 L 502 148" stroke="#5a4f42" strokeWidth="2.5" fill="none" strokeLinecap="round" />
             <circle r="3" fill="#7fb8d6" style={{ filter: 'drop-shadow(0 0 4px #7fb8d6)' }}>
-              <animateMotion dur="2.5s" repeatCount="indefinite" path="M 503 120 Q 485 110 467 120" />
+              <animateMotion dur="3s" repeatCount="indefinite" path="M 468 148 L 502 148" />
             </circle>
-            <text x="485" y="180" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontStyle="italic" fontSize="13" fill="#9ec48a">Sprouting pair</text>
-            <text x="485" y="198" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">resources flow both ways</text>
+            {/* Stonebreaker → Sun Lichen (mineral) */}
+            <path d="M 512 134 L 493 110" stroke="#5a4f42" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+            <circle r="3" fill="#b8a890" style={{ filter: 'drop-shadow(0 0 4px #b8a890)' }}>
+              <animateMotion dur="3s" repeatCount="indefinite" path="M 512 134 L 493 110" />
+            </circle>
+
+            <text x="485" y="190" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="13" fill="#9ec48a">Sprouting cycle</text>
+            <text x="485" y="206" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">three species fuel each other</text>
           </svg>
           <div className="diagram-caption">inspect · cultivate · weave</div>
         </div>
@@ -779,10 +795,8 @@ function HelpModal({ onClose }) {
         <ul>
           <li><strong>Click any explored patch</strong> to inspect it. The biome glyph (☀ sunny, ◉ damp, ◆ rocky, ✦ loamy) tells you which species can grow there.</li>
           <li><strong>Cultivate a species</strong> by picking from the menu (15 nutrients; 25 for a Hyphal Lab). Cultivation reveals nearby patches.</li>
-          <li><strong>Weave a hypha</strong> by dragging from one colonized patch to another (5 nutrients). You can also click a patch and use the "Weave hypha from here" button. Threads can't cross each other and have a maximum length.</li>
-          <li><strong>Pan the map</strong> by clicking and dragging on empty ground. Hit "Recenter map" if you wander too far.</li>
+          <li><strong>Weave a hypha</strong> from any colonized patch (5 nutrients). Threads can't cross each other and have a maximum length.</li>
           <li><strong>Pass the year</strong> to collect income, advance time, and produce science from labs.</li>
-          <li><strong>Undo</strong> from the Field Notes panel rewinds your last action — but only one step back, so use it carefully.</li>
         </ul>
 
         <h3>How resources flow</h3>
@@ -791,11 +805,17 @@ function HelpModal({ onClose }) {
           patch <em>produces</em> exactly what the other <em>needs</em>. If neither side can satisfy the other, the
           thread is dead weight.
         </p>
+        <p>
+          Each patch has a <strong>finite yield</strong> — shown as small dots inside the node — of either
+          1 or 2 units per cycle. A patch with capacity 2 can fuel two hungry neighbors at once; capacity 1 must
+          choose. No two species can fully fuel each other on their own, so every self-sustaining loop needs at
+          least three patches.
+        </p>
         <div className="res-row">
           <span><span style={{ color: '#f4c95d' }}>☀</span> sugar</span>
           <span><span style={{ color: '#7fb8d6' }}>◉</span> water</span>
           <span><span style={{ color: '#b8a890' }}>◆</span> mineral</span>
-          <span><span style={{ color: '#a8d49a' }}>✦</span> nitrogen</span>
+          <span><span style={{ color: '#a8d49a' }}>✿</span> nitrogen</span>
           <span><span style={{ color: '#d4a8d4' }}>✺</span> spore</span>
         </div>
 
@@ -803,13 +823,14 @@ function HelpModal({ onClose }) {
         <ul>
           <li><span style={{ color: '#6a5f4e', fontStyle: 'italic' }}>Dormant</span> — colonized but unmet needs. Earns penalties.</li>
           <li><span style={{ color: '#7a9c6a', fontStyle: 'italic' }}>Sprouting</span> — all needs satisfied.</li>
-          <li><span style={{ color: '#9ec48a', fontStyle: 'italic' }}>Thriving</span> — needs satisfied + 2 imports + 2 exports.</li>
-          <li><span style={{ color: '#e8c46b', fontStyle: 'italic' }}>Flourishing</span> — needs satisfied + 3 imports + 3 exports + 3 thriving neighbors. The big point payout.</li>
+          <li><span style={{ color: '#9ec48a', fontStyle: 'italic' }}>Thriving</span> — needs satisfied + at least one export delivered.</li>
+          <li><span style={{ color: '#e8c46b', fontStyle: 'italic' }}>Flourishing</span> — needs satisfied + 2 imports + 2 exports + 2 thriving neighbors. Requires a capacity-2 patch growing a two-need species.</li>
         </ul>
 
         <h3>Strategy</h3>
         <ul>
-          <li>Start with a <strong>self-sustaining loop</strong>: Sun Lichen (☀) ↔ Marsh Veil (◉) is the cheapest pair.</li>
+          <li>The cheapest <strong>self-sustaining loop</strong> is a triangle: Sun Lichen (☀) ← Stonebreaker (◆) ← Marsh Veil (◉) ← Sun Lichen. Each feeds the next.</li>
+          <li>Watch the capacity dots — capacity-2 patches are precious, since only they can reach Flourishing and only they can fuel two neighbors at once.</li>
           <li>Add a Decay Court for nitrogen, then attempt the demanding species (Crystal Cap, Spore Hall) once you have spare resources.</li>
           <li>Hyphal Labs accept any one resource and convert it to <span style={{ color: '#e8c46b' }}>✦ science</span>, which boosts your final score.</li>
           <li>Final score = <em>raw points × network health</em>. Leaving lots of patches Dormant tanks your multiplier.</li>
@@ -833,10 +854,7 @@ export default function Mycelium() {
   const [mousePos, setMousePos] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [prevState, setPrevState] = useState(null);
-  const [weaveDragFrom, setWeaveDragFrom] = useState(null);
   const dragRef = useRef({ active: false, moved: false, startX: 0, startY: 0, startPan: { x: 0, y: 0 } });
-  const weaveDragRef = useRef({ active: false, fromId: null, moved: false, startX: 0, startY: 0 });
   const svgRef = useRef(null);
   const mapInnerRef = useRef(null);
 
@@ -848,19 +866,6 @@ export default function Mycelium() {
     const s = Math.floor(Math.random() * 1e9);
     setSeed(s);
     setState(defaultState(s));
-    setPrevState(null);
-  };
-
-  // Capture a snapshot of state before a player action that should be undoable.
-  // Only one snapshot is kept — undo is a single step, never a stack.
-  const pushHistory = () => {
-    setPrevState(state);
-  };
-
-  const undo = () => {
-    if (!prevState) return;
-    setState(prevState);
-    setPrevState(null);
   };
 
   // Edge validation
@@ -889,9 +894,18 @@ export default function Mycelium() {
     if (state.gameOver) return;
     // If user just dragged, suppress the click
     if (dragRef.current.moved) return;
-    if (weaveDragRef.current.moved) return;
     if (state.pendingEdgeFrom !== null) {
-      attemptWeave(state.pendingEdgeFrom, id);
+      if (canConnect(state.pendingEdgeFrom, id)) {
+        setState(st => ({
+          ...st,
+          edges: [...st.edges, { from: st.pendingEdgeFrom, to: id }],
+          nutrients: st.nutrients - 5,
+          pendingEdgeFrom: null,
+          log: [`Wove a hypha (${st.pendingEdgeFrom} ↔ ${id}).`, ...st.log].slice(0, 6),
+        }));
+      } else {
+        setState(st => ({ ...st, pendingEdgeFrom: null, log: ['Connection failed.', ...st.log].slice(0, 6) }));
+      }
     } else {
       const node = state.map.nodes[id];
       if (!node.explored) return;
@@ -902,7 +916,6 @@ export default function Mycelium() {
   // Pass year
   const passYear = () => {
     if (state.gameOver) return;
-    pushHistory();
     setState(st => {
       const newNutrients = st.nutrients + income;
       const sciencePerYear = st.map.nodes.reduce((acc, n) => {
@@ -939,7 +952,6 @@ export default function Mycelium() {
   const handlePointerDown = (e) => {
     // Only initiate pan on background (not on a node — node handlers stop propagation in their own way)
     if (e.button !== undefined && e.button !== 0) return;
-    if (weaveDragRef.current.active) return; // node-down already began a weave
     dragRef.current = {
       active: true,
       moved: false,
@@ -953,19 +965,7 @@ export default function Mycelium() {
   };
 
   const handlePointerMove = (e) => {
-    // Drag-to-weave preview
-    if (weaveDragRef.current.active) {
-      const dx = e.clientX - weaveDragRef.current.startX;
-      const dy = e.clientY - weaveDragRef.current.startY;
-      if (!weaveDragRef.current.moved && Math.hypot(dx, dy) > 4) {
-        weaveDragRef.current.moved = true;
-      }
-      if (weaveDragRef.current.moved) {
-        setMousePos(screenToWorld(e.clientX, e.clientY));
-      }
-      return; // suppress pan during weave
-    }
-    // Update preview line position when weaving via click flow
+    // Update preview line position when weaving
     if (state.pendingEdgeFrom !== null && !dragRef.current.active) {
       setMousePos(screenToWorld(e.clientX, e.clientY));
     }
@@ -980,6 +980,7 @@ export default function Mycelium() {
         const rect = svgRef.current.getBoundingClientRect();
         const scaleX = state.map.width / rect.width;
         const scaleY = state.map.height / rect.height;
+        // Clamp pan so map stays in view: pan in [-mapW/2, mapW/2] roughly
         const maxPan = 400;
         setPan({
           x: Math.max(-maxPan, Math.min(maxPan, dragRef.current.startPan.x - dx * scaleX)),
@@ -990,59 +991,7 @@ export default function Mycelium() {
   };
 
   const handlePointerUp = (e) => {
-    // If we were drag-weaving, attempt the weave
-    if (weaveDragRef.current.active) {
-      const fromId = weaveDragRef.current.fromId;
-      const moved = weaveDragRef.current.moved;
-      // Find which node we're over by hit-testing world coords
-      const world = screenToWorld(e.clientX, e.clientY);
-      let toId = null;
-      for (const n of state.map.nodes) {
-        if (n.id === fromId) continue;
-        if (Math.hypot(n.x - world.x, n.y - world.y) <= 30) { toId = n.id; break; }
-      }
-      weaveDragRef.current = { active: false, fromId: null, moved: false, startX: 0, startY: 0 };
-      setWeaveDragFrom(null);
-      setMousePos(null);
-      if (moved && toId !== null) {
-        attemptWeave(fromId, toId);
-      }
-      // If they didn't actually drag, fall through to the click handler (which fires after pointerup on the same target)
-    }
     dragRef.current.active = false;
-  };
-
-  // Begin a weave-drag from a specific node (called by node's onPointerDown)
-  const beginNodeDrag = (nodeId, e) => {
-    if (state.gameOver) return;
-    const node = state.map.nodes[nodeId];
-    if (!node || !node.explored || !node.species) return;
-    weaveDragRef.current = {
-      active: true,
-      fromId: nodeId,
-      moved: false,
-      startX: e.clientX,
-      startY: e.clientY,
-    };
-    setWeaveDragFrom(nodeId);
-    setMousePos({ x: node.x, y: node.y });
-    // ensure pan-drag does not also activate
-    dragRef.current.active = false;
-  };
-
-  const attemptWeave = (fromId, toId) => {
-    if (canConnect(fromId, toId)) {
-      pushHistory();
-      setState(st => ({
-        ...st,
-        edges: [...st.edges, { from: fromId, to: toId }],
-        nutrients: st.nutrients - 5,
-        pendingEdgeFrom: null,
-        log: [`Wove a hypha (${fromId} ↔ ${toId}).`, ...st.log].slice(0, 6),
-      }));
-    } else {
-      setState(st => ({ ...st, pendingEdgeFrom: null, log: ['Connection failed.', ...st.log].slice(0, 6) }));
-    }
   };
 
   const cancelEdge = () => setState(st => ({ ...st, pendingEdgeFrom: null }));
@@ -1058,20 +1007,16 @@ export default function Mycelium() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // The "from" node of the in-progress weave — either click-flow or drag-flow
-  const activeWeaveFromId = state.pendingEdgeFrom !== null
-    ? state.pendingEdgeFrom
-    : weaveDragFrom;
-  const pendingFromNode = activeWeaveFromId !== null ? state.map.nodes[activeWeaveFromId] : null;
+  const pendingFromNode = state.pendingEdgeFrom !== null ? state.map.nodes[state.pendingEdgeFrom] : null;
   const hoverNodeObj = hoverNode !== null ? state.map.nodes[hoverNode] : null;
   const hoveredFromValid = pendingFromNode && hoverNodeObj
-    ? canConnect(activeWeaveFromId, hoverNode)
+    ? canConnect(state.pendingEdgeFrom, hoverNode)
     : false;
 
   return (
     <div className="app">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=JetBrains+Mono:wght@400;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,500&family=JetBrains+Mono:wght@400;600&display=swap');
 
         * { box-sizing: border-box; }
 
@@ -1083,7 +1028,7 @@ export default function Mycelium() {
             radial-gradient(ellipse at 80% 90%, rgba(232, 196, 107, 0.06) 0%, transparent 50%),
             radial-gradient(ellipse at 50% 50%, #14110e 0%, #0a0807 100%);
           color: #d8cfbf;
-          font-family: 'Inter', system-ui, sans-serif;
+          font-family: 'Cormorant Garamond', Georgia, serif;
           padding: 20px;
           position: relative;
           overflow: hidden;
@@ -1113,30 +1058,15 @@ export default function Mycelium() {
           border-bottom: 1px solid #2a241e;
         }
         .title {
-          font-family: 'Inter', system-ui, sans-serif;
-          font-weight: 600;
+          font-family: 'Cormorant Garamond', serif;
+          font-weight: 500;
           font-style: italic;
           font-size: 42px;
-          letter-spacing: -0.01em;
+          letter-spacing: 0.02em;
           color: #e8c46b;
           margin: 0;
           line-height: 1;
           text-shadow: 0 0 30px rgba(232, 196, 107, 0.2);
-          display: flex;
-          align-items: baseline;
-          gap: 10px;
-        }
-        .title-version {
-          font-family: 'JetBrains Mono', monospace;
-          font-style: normal;
-          font-size: 10px;
-          letter-spacing: 0.15em;
-          color: #6a5f4e;
-          font-weight: 500;
-          padding: 2px 6px;
-          border: 1px solid #2a241e;
-          border-radius: 2px;
-          text-transform: uppercase;
         }
         .subtitle {
           font-family: 'JetBrains Mono', monospace;
@@ -1168,7 +1098,7 @@ export default function Mycelium() {
         .stat-value {
           color: #e8c46b;
           font-size: 18px;
-          font-family: 'Inter', system-ui, sans-serif;
+          font-family: 'Cormorant Garamond', serif;
           font-weight: 600;
         }
 
@@ -1179,7 +1109,7 @@ export default function Mycelium() {
           width: 38px; height: 38px;
           border-radius: 50%;
           cursor: pointer;
-          font-family: 'Inter', system-ui, sans-serif;
+          font-family: 'Cormorant Garamond', serif;
           font-style: italic;
           font-size: 22px;
           line-height: 1;
@@ -1203,7 +1133,7 @@ export default function Mycelium() {
           border: 1px solid rgba(90, 79, 66, 0.6);
           border-radius: 3px;
           padding: 2px;
-          font-family: 'Inter', system-ui, sans-serif;
+          font-family: 'Cormorant Garamond', serif;
           color: #d8cfbf;
           box-shadow: 0 4px 16px rgba(0,0,0,0.5);
           display: flex;
@@ -1239,7 +1169,7 @@ export default function Mycelium() {
           padding: 2px 6px;
           color: #d8cfbf;
           cursor: pointer;
-          font-family: 'Inter', system-ui, sans-serif;
+          font-family: 'Cormorant Garamond', serif;
           font-size: 12px;
           border-radius: 2px;
           transition: background 0.1s;
@@ -1286,7 +1216,7 @@ export default function Mycelium() {
         @keyframes rise { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
 
         .modal h2 {
-          font-family: 'Inter', system-ui, sans-serif;
+          font-family: 'Cormorant Garamond', serif;
           font-style: italic;
           font-weight: 500;
           font-size: 32px;
@@ -1305,7 +1235,7 @@ export default function Mycelium() {
           border-bottom: 1px dashed #2a241e;
         }
         .modal p, .modal li {
-          font-family: 'Inter', system-ui, sans-serif;
+          font-family: 'Cormorant Garamond', serif;
           font-size: 16px;
           line-height: 1.5;
           color: #c8bfaf;
@@ -1373,7 +1303,7 @@ export default function Mycelium() {
           background: #14100c;
           border: 1px solid #2a241e;
           border-radius: 12px;
-          font-family: 'Inter', system-ui, sans-serif;
+          font-family: 'Cormorant Garamond', serif;
           color: #c8bfaf;
         }
 
@@ -1468,7 +1398,7 @@ export default function Mycelium() {
           margin-bottom: 4px;
         }
         .panel-title {
-          font-family: 'Inter', system-ui, sans-serif;
+          font-family: 'Cormorant Garamond', serif;
           font-style: italic;
           font-size: 22px;
           color: #e8c46b;
@@ -1487,30 +1417,6 @@ export default function Mycelium() {
         }
         .x-btn:hover { color: #e8c46b; border-color: #e8c46b; }
 
-        .undo-btn {
-          background: #14110e;
-          border: 1px solid #3a3530;
-          color: #8a7f6e;
-          padding: 5px 10px;
-          border-radius: 3px;
-          cursor: pointer;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 9px;
-          letter-spacing: 0.2em;
-          text-transform: uppercase;
-          transition: all 0.15s;
-          line-height: 1;
-        }
-        .undo-btn:hover:not(:disabled) {
-          color: #e8c46b;
-          border-color: #5a4f42;
-          background: #1c1814;
-        }
-        .undo-btn:disabled {
-          opacity: 0.35;
-          cursor: not-allowed;
-        }
-
         .kv {
           display: flex;
           justify-content: space-between;
@@ -1528,7 +1434,7 @@ export default function Mycelium() {
         }
 
         .tier-badge {
-          font-family: 'Inter', system-ui, sans-serif;
+          font-family: 'Cormorant Garamond', serif;
           font-style: italic;
           font-weight: 600;
         }
@@ -1576,7 +1482,7 @@ export default function Mycelium() {
           padding: 10px 12px;
           cursor: pointer;
           color: #d8cfbf;
-          font-family: 'Inter', system-ui, sans-serif;
+          font-family: 'Cormorant Garamond', serif;
           transition: all 0.15s;
         }
         .species-card:hover:not(:disabled) {
@@ -1644,7 +1550,7 @@ export default function Mycelium() {
           color: #e8c46b;
         }
         .game-over .score {
-          font-family: 'Inter', system-ui, sans-serif;
+          font-family: 'Cormorant Garamond', serif;
           font-size: 64px;
           color: #e8c46b;
           font-weight: 600;
@@ -1671,10 +1577,7 @@ export default function Mycelium() {
       <div className="container">
         <header>
           <div>
-            <h1 className="title">
-              <span>Mycelium</span>
-              <span className="title-version">v1.0</span>
-            </h1>
+            <h1 className="title">Mycelium</h1>
             <div className="subtitle">a network of patient threads · year {state.year} of {state.maxYears}</div>
           </div>
           <div className="stats-bar">
@@ -1712,7 +1615,7 @@ export default function Mycelium() {
               <span>
                 {state.pendingEdgeFrom !== null
                   ? `weaving from node ${state.pendingEdgeFrom} — click target or press esc`
-                  : 'click to inspect · drag patch to weave · drag map to pan'}
+                  : 'click a patch to inspect'}
               </span>
             </div>
             <div className="map-inner" ref={mapInnerRef}>
@@ -1749,7 +1652,7 @@ export default function Mycelium() {
                   key={i}
                   from={state.map.nodes[e.from]}
                   to={state.map.nodes[e.to]}
-                  net={net}
+                  flow={net.edgeFlows?.[i]}
                 />
               ))}
 
@@ -1767,12 +1670,6 @@ export default function Mycelium() {
                 <g
                   key={n.id}
                   onClick={() => handleNodeClick(n.id)}
-                  onPointerDown={(e) => {
-                    if (n.explored && n.species && !state.gameOver) {
-                      e.stopPropagation();
-                      beginNodeDrag(n.id, e);
-                    }
-                  }}
                   onMouseEnter={() => setHoverNode(n.id)}
                   onMouseLeave={() => setHoverNode(null)}
                   style={{ cursor: n.explored ? 'pointer' : 'default' }}
@@ -1782,8 +1679,8 @@ export default function Mycelium() {
                     netInfo={net[n.id]}
                     isSelected={state.selectedNode === n.id}
                     isHovered={hoverNode === n.id}
-                    isPendingFrom={activeWeaveFromId === n.id}
-                    hoveredFromValid={activeWeaveFromId !== null && hoverNode === n.id && hoveredFromValid}
+                    isPendingFrom={state.pendingEdgeFrom === n.id}
+                    hoveredFromValid={state.pendingEdgeFrom !== null && hoverNode === n.id && hoveredFromValid}
                   />
                 </g>
               ))}
@@ -1794,7 +1691,6 @@ export default function Mycelium() {
               svgRef={svgRef}
               containerRef={mapInnerRef}
               pan={pan}
-              pushHistory={pushHistory}
             />
             </div>
           </div>
@@ -1815,9 +1711,31 @@ export default function Mycelium() {
                 setState={setState}
                 net={net}
                 onClose={() => setState(st => ({ ...st, selectedNode: null }))}
-                pushHistory={pushHistory}
               />
-            ) : null}
+            ) : (
+              <div className="panel">
+                <div className="panel-head">
+                  <div>
+                    <div className="panel-eyebrow">field guide</div>
+                    <div className="panel-title">Resources</div>
+                  </div>
+                </div>
+                <div className="legend">
+                  {Object.entries(RESOURCES).map(([key, r]) => (
+                    <div key={key} className="legend-row">
+                      <span>
+                        <span style={{ color: r.color, fontSize: 16, marginRight: 8 }}>{r.glyph}</span>
+                        {r.name}
+                      </span>
+                      <span>{key}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 14, fontStyle: 'italic', color: '#8a7f6e', fontSize: 13, lineHeight: 1.5 }}>
+                  Cultivate species on patches. Weave hyphae between them. A thread carries one resource each way — only what one side produces and the other side needs.
+                </div>
+              </div>
+            )}
 
             <div className="panel">
               <div className="panel-head">
@@ -1855,15 +1773,6 @@ export default function Mycelium() {
                   <div className="panel-eyebrow">chronicle</div>
                   <div className="panel-title">Field Notes</div>
                 </div>
-                <button
-                  className="undo-btn"
-                  onClick={undo}
-                  disabled={!prevState}
-                  title="Undo last action"
-                  aria-label="Undo last action"
-                >
-                  ↶ Undo
-                </button>
               </div>
               <div className="log">
                 {state.log.map((line, i) => (
