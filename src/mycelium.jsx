@@ -447,7 +447,7 @@ function PreviewEdge({ from, to, valid }) {
 }
 
 // ---------- In-map floating menu ----------
-function PatchMenu({ state, setState, svgRef, containerRef, pan }) {
+function PatchMenu({ state, setState, svgRef, containerRef, pan, pushHistory }) {
   const [pos, setPos] = React.useState(null);
   const node = state.selectedNode !== null ? state.map.nodes[state.selectedNode] : null;
   const isVisible = node && !node.species;
@@ -490,6 +490,7 @@ function PatchMenu({ state, setState, svgRef, containerRef, pan }) {
       setState(st => ({ ...st, log: ['Not enough nutrients to grow.', ...st.log].slice(0, 6) }));
       return;
     }
+    pushHistory();
     setState(st => {
       const nodes = st.map.nodes.map((n, i) =>
         i === node.id ? { ...n, species: key, produces: s.produces, needs: [...s.needs] } : n
@@ -579,7 +580,7 @@ function PatchMenu({ state, setState, svgRef, containerRef, pan }) {
 }
 
 // ---------- Side panel: node details / actions ----------
-function NodePanel({ state, setState, net, onClose }) {
+function NodePanel({ state, setState, net, onClose, pushHistory }) {
   const node = state.map.nodes[state.selectedNode];
   if (!node) return null;
   const r = net[node.id];
@@ -595,6 +596,7 @@ function NodePanel({ state, setState, net, onClose }) {
       setState(st => ({ ...st, log: ['Not enough nutrients to grow.', ...st.log].slice(0, 6) }));
       return;
     }
+    pushHistory();
     setState(st => {
       const nodes = st.map.nodes.map((n, i) =>
         i === node.id
@@ -737,8 +739,8 @@ function HelpModal({ onClose }) {
             <circle cx="95" cy="120" r="26" fill="#d4b86a" opacity="0.18" />
             <circle cx="95" cy="120" r="22" fill="#1f1a16" stroke="#5a5048" strokeWidth="1.8" />
             <text x="95" y="125" textAnchor="middle" fontSize="16" fill="#d4b86a" opacity="0.8">☀</text>
-            <text x="95" y="180" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="13" fill="#8a7f6e">sunny patch</text>
-            <text x="95" y="198" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">click to inspect</text>
+            <text x="95" y="180" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontStyle="italic" fontSize="13" fill="#8a7f6e">sunny patch</text>
+            <text x="95" y="198" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">click to inspect</text>
 
             {/* arrow */}
             <path d="M 140 120 L 195 120" stroke="#5a4f42" strokeWidth="1.5" markerEnd="url(#arr)" fill="none" />
@@ -748,8 +750,8 @@ function HelpModal({ onClose }) {
             <circle cx="290" cy="120" r="26" fill="#d4b86a" opacity="0.18" />
             <circle cx="290" cy="120" r="22" fill="#1f1a16" stroke="#7a9c6a" strokeWidth="2" />
             <text x="290" y="126" textAnchor="middle" fontSize="22" fill="#f4c95d" style={{ filter: 'drop-shadow(0 0 4px #f4c95d88)' }}>☀</text>
-            <text x="290" y="180" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="13" fill="#e8c46b">Sun Lichen</text>
-            <text x="290" y="198" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">needs ◉ · makes ☀</text>
+            <text x="290" y="180" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontStyle="italic" fontSize="13" fill="#e8c46b">Sun Lichen</text>
+            <text x="290" y="198" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">needs ◉ · makes ☀</text>
 
             {/* arrow */}
             <path d="M 335 120 L 390 120" stroke="#5a4f42" strokeWidth="1.5" markerEnd="url(#arr)" fill="none" />
@@ -768,8 +770,8 @@ function HelpModal({ onClose }) {
             <circle r="3" fill="#7fb8d6" style={{ filter: 'drop-shadow(0 0 4px #7fb8d6)' }}>
               <animateMotion dur="2.5s" repeatCount="indefinite" path="M 503 120 Q 485 110 467 120" />
             </circle>
-            <text x="485" y="180" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="13" fill="#9ec48a">Sprouting pair</text>
-            <text x="485" y="198" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">resources flow both ways</text>
+            <text x="485" y="180" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontStyle="italic" fontSize="13" fill="#9ec48a">Sprouting pair</text>
+            <text x="485" y="198" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">resources flow both ways</text>
           </svg>
           <div className="diagram-caption">inspect · cultivate · weave</div>
         </div>
@@ -777,8 +779,10 @@ function HelpModal({ onClose }) {
         <ul>
           <li><strong>Click any explored patch</strong> to inspect it. The biome glyph (☀ sunny, ◉ damp, ◆ rocky, ✦ loamy) tells you which species can grow there.</li>
           <li><strong>Cultivate a species</strong> by picking from the menu (15 nutrients; 25 for a Hyphal Lab). Cultivation reveals nearby patches.</li>
-          <li><strong>Weave a hypha</strong> from any colonized patch (5 nutrients). Threads can't cross each other and have a maximum length.</li>
+          <li><strong>Weave a hypha</strong> by dragging from one colonized patch to another (5 nutrients). You can also click a patch and use the "Weave hypha from here" button. Threads can't cross each other and have a maximum length.</li>
+          <li><strong>Pan the map</strong> by clicking and dragging on empty ground. Hit "Recenter map" if you wander too far.</li>
           <li><strong>Pass the year</strong> to collect income, advance time, and produce science from labs.</li>
+          <li><strong>Undo</strong> from the Field Notes panel rewinds your last action — but only one step back, so use it carefully.</li>
         </ul>
 
         <h3>How resources flow</h3>
@@ -829,7 +833,10 @@ export default function Mycelium() {
   const [mousePos, setMousePos] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [prevState, setPrevState] = useState(null);
+  const [weaveDragFrom, setWeaveDragFrom] = useState(null);
   const dragRef = useRef({ active: false, moved: false, startX: 0, startY: 0, startPan: { x: 0, y: 0 } });
+  const weaveDragRef = useRef({ active: false, fromId: null, moved: false, startX: 0, startY: 0 });
   const svgRef = useRef(null);
   const mapInnerRef = useRef(null);
 
@@ -841,6 +848,19 @@ export default function Mycelium() {
     const s = Math.floor(Math.random() * 1e9);
     setSeed(s);
     setState(defaultState(s));
+    setPrevState(null);
+  };
+
+  // Capture a snapshot of state before a player action that should be undoable.
+  // Only one snapshot is kept — undo is a single step, never a stack.
+  const pushHistory = () => {
+    setPrevState(state);
+  };
+
+  const undo = () => {
+    if (!prevState) return;
+    setState(prevState);
+    setPrevState(null);
   };
 
   // Edge validation
@@ -869,18 +889,9 @@ export default function Mycelium() {
     if (state.gameOver) return;
     // If user just dragged, suppress the click
     if (dragRef.current.moved) return;
+    if (weaveDragRef.current.moved) return;
     if (state.pendingEdgeFrom !== null) {
-      if (canConnect(state.pendingEdgeFrom, id)) {
-        setState(st => ({
-          ...st,
-          edges: [...st.edges, { from: st.pendingEdgeFrom, to: id }],
-          nutrients: st.nutrients - 5,
-          pendingEdgeFrom: null,
-          log: [`Wove a hypha (${st.pendingEdgeFrom} ↔ ${id}).`, ...st.log].slice(0, 6),
-        }));
-      } else {
-        setState(st => ({ ...st, pendingEdgeFrom: null, log: ['Connection failed.', ...st.log].slice(0, 6) }));
-      }
+      attemptWeave(state.pendingEdgeFrom, id);
     } else {
       const node = state.map.nodes[id];
       if (!node.explored) return;
@@ -891,6 +902,7 @@ export default function Mycelium() {
   // Pass year
   const passYear = () => {
     if (state.gameOver) return;
+    pushHistory();
     setState(st => {
       const newNutrients = st.nutrients + income;
       const sciencePerYear = st.map.nodes.reduce((acc, n) => {
@@ -927,6 +939,7 @@ export default function Mycelium() {
   const handlePointerDown = (e) => {
     // Only initiate pan on background (not on a node — node handlers stop propagation in their own way)
     if (e.button !== undefined && e.button !== 0) return;
+    if (weaveDragRef.current.active) return; // node-down already began a weave
     dragRef.current = {
       active: true,
       moved: false,
@@ -940,7 +953,19 @@ export default function Mycelium() {
   };
 
   const handlePointerMove = (e) => {
-    // Update preview line position when weaving
+    // Drag-to-weave preview
+    if (weaveDragRef.current.active) {
+      const dx = e.clientX - weaveDragRef.current.startX;
+      const dy = e.clientY - weaveDragRef.current.startY;
+      if (!weaveDragRef.current.moved && Math.hypot(dx, dy) > 4) {
+        weaveDragRef.current.moved = true;
+      }
+      if (weaveDragRef.current.moved) {
+        setMousePos(screenToWorld(e.clientX, e.clientY));
+      }
+      return; // suppress pan during weave
+    }
+    // Update preview line position when weaving via click flow
     if (state.pendingEdgeFrom !== null && !dragRef.current.active) {
       setMousePos(screenToWorld(e.clientX, e.clientY));
     }
@@ -955,7 +980,6 @@ export default function Mycelium() {
         const rect = svgRef.current.getBoundingClientRect();
         const scaleX = state.map.width / rect.width;
         const scaleY = state.map.height / rect.height;
-        // Clamp pan so map stays in view: pan in [-mapW/2, mapW/2] roughly
         const maxPan = 400;
         setPan({
           x: Math.max(-maxPan, Math.min(maxPan, dragRef.current.startPan.x - dx * scaleX)),
@@ -966,7 +990,59 @@ export default function Mycelium() {
   };
 
   const handlePointerUp = (e) => {
+    // If we were drag-weaving, attempt the weave
+    if (weaveDragRef.current.active) {
+      const fromId = weaveDragRef.current.fromId;
+      const moved = weaveDragRef.current.moved;
+      // Find which node we're over by hit-testing world coords
+      const world = screenToWorld(e.clientX, e.clientY);
+      let toId = null;
+      for (const n of state.map.nodes) {
+        if (n.id === fromId) continue;
+        if (Math.hypot(n.x - world.x, n.y - world.y) <= 30) { toId = n.id; break; }
+      }
+      weaveDragRef.current = { active: false, fromId: null, moved: false, startX: 0, startY: 0 };
+      setWeaveDragFrom(null);
+      setMousePos(null);
+      if (moved && toId !== null) {
+        attemptWeave(fromId, toId);
+      }
+      // If they didn't actually drag, fall through to the click handler (which fires after pointerup on the same target)
+    }
     dragRef.current.active = false;
+  };
+
+  // Begin a weave-drag from a specific node (called by node's onPointerDown)
+  const beginNodeDrag = (nodeId, e) => {
+    if (state.gameOver) return;
+    const node = state.map.nodes[nodeId];
+    if (!node || !node.explored || !node.species) return;
+    weaveDragRef.current = {
+      active: true,
+      fromId: nodeId,
+      moved: false,
+      startX: e.clientX,
+      startY: e.clientY,
+    };
+    setWeaveDragFrom(nodeId);
+    setMousePos({ x: node.x, y: node.y });
+    // ensure pan-drag does not also activate
+    dragRef.current.active = false;
+  };
+
+  const attemptWeave = (fromId, toId) => {
+    if (canConnect(fromId, toId)) {
+      pushHistory();
+      setState(st => ({
+        ...st,
+        edges: [...st.edges, { from: fromId, to: toId }],
+        nutrients: st.nutrients - 5,
+        pendingEdgeFrom: null,
+        log: [`Wove a hypha (${fromId} ↔ ${toId}).`, ...st.log].slice(0, 6),
+      }));
+    } else {
+      setState(st => ({ ...st, pendingEdgeFrom: null, log: ['Connection failed.', ...st.log].slice(0, 6) }));
+    }
   };
 
   const cancelEdge = () => setState(st => ({ ...st, pendingEdgeFrom: null }));
@@ -982,16 +1058,20 @@ export default function Mycelium() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const pendingFromNode = state.pendingEdgeFrom !== null ? state.map.nodes[state.pendingEdgeFrom] : null;
+  // The "from" node of the in-progress weave — either click-flow or drag-flow
+  const activeWeaveFromId = state.pendingEdgeFrom !== null
+    ? state.pendingEdgeFrom
+    : weaveDragFrom;
+  const pendingFromNode = activeWeaveFromId !== null ? state.map.nodes[activeWeaveFromId] : null;
   const hoverNodeObj = hoverNode !== null ? state.map.nodes[hoverNode] : null;
   const hoveredFromValid = pendingFromNode && hoverNodeObj
-    ? canConnect(state.pendingEdgeFrom, hoverNode)
+    ? canConnect(activeWeaveFromId, hoverNode)
     : false;
 
   return (
     <div className="app">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,500&family=JetBrains+Mono:wght@400;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=JetBrains+Mono:wght@400;600&display=swap');
 
         * { box-sizing: border-box; }
 
@@ -1003,7 +1083,7 @@ export default function Mycelium() {
             radial-gradient(ellipse at 80% 90%, rgba(232, 196, 107, 0.06) 0%, transparent 50%),
             radial-gradient(ellipse at 50% 50%, #14110e 0%, #0a0807 100%);
           color: #d8cfbf;
-          font-family: 'Cormorant Garamond', Georgia, serif;
+          font-family: 'Inter', system-ui, sans-serif;
           padding: 20px;
           position: relative;
           overflow: hidden;
@@ -1033,15 +1113,30 @@ export default function Mycelium() {
           border-bottom: 1px solid #2a241e;
         }
         .title {
-          font-family: 'Cormorant Garamond', serif;
-          font-weight: 500;
+          font-family: 'Inter', system-ui, sans-serif;
+          font-weight: 600;
           font-style: italic;
           font-size: 42px;
-          letter-spacing: 0.02em;
+          letter-spacing: -0.01em;
           color: #e8c46b;
           margin: 0;
           line-height: 1;
           text-shadow: 0 0 30px rgba(232, 196, 107, 0.2);
+          display: flex;
+          align-items: baseline;
+          gap: 10px;
+        }
+        .title-version {
+          font-family: 'JetBrains Mono', monospace;
+          font-style: normal;
+          font-size: 10px;
+          letter-spacing: 0.15em;
+          color: #6a5f4e;
+          font-weight: 500;
+          padding: 2px 6px;
+          border: 1px solid #2a241e;
+          border-radius: 2px;
+          text-transform: uppercase;
         }
         .subtitle {
           font-family: 'JetBrains Mono', monospace;
@@ -1073,7 +1168,7 @@ export default function Mycelium() {
         .stat-value {
           color: #e8c46b;
           font-size: 18px;
-          font-family: 'Cormorant Garamond', serif;
+          font-family: 'Inter', system-ui, sans-serif;
           font-weight: 600;
         }
 
@@ -1084,7 +1179,7 @@ export default function Mycelium() {
           width: 38px; height: 38px;
           border-radius: 50%;
           cursor: pointer;
-          font-family: 'Cormorant Garamond', serif;
+          font-family: 'Inter', system-ui, sans-serif;
           font-style: italic;
           font-size: 22px;
           line-height: 1;
@@ -1108,7 +1203,7 @@ export default function Mycelium() {
           border: 1px solid rgba(90, 79, 66, 0.6);
           border-radius: 3px;
           padding: 2px;
-          font-family: 'Cormorant Garamond', serif;
+          font-family: 'Inter', system-ui, sans-serif;
           color: #d8cfbf;
           box-shadow: 0 4px 16px rgba(0,0,0,0.5);
           display: flex;
@@ -1144,7 +1239,7 @@ export default function Mycelium() {
           padding: 2px 6px;
           color: #d8cfbf;
           cursor: pointer;
-          font-family: 'Cormorant Garamond', serif;
+          font-family: 'Inter', system-ui, sans-serif;
           font-size: 12px;
           border-radius: 2px;
           transition: background 0.1s;
@@ -1191,7 +1286,7 @@ export default function Mycelium() {
         @keyframes rise { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
 
         .modal h2 {
-          font-family: 'Cormorant Garamond', serif;
+          font-family: 'Inter', system-ui, sans-serif;
           font-style: italic;
           font-weight: 500;
           font-size: 32px;
@@ -1210,7 +1305,7 @@ export default function Mycelium() {
           border-bottom: 1px dashed #2a241e;
         }
         .modal p, .modal li {
-          font-family: 'Cormorant Garamond', serif;
+          font-family: 'Inter', system-ui, sans-serif;
           font-size: 16px;
           line-height: 1.5;
           color: #c8bfaf;
@@ -1278,7 +1373,7 @@ export default function Mycelium() {
           background: #14100c;
           border: 1px solid #2a241e;
           border-radius: 12px;
-          font-family: 'Cormorant Garamond', serif;
+          font-family: 'Inter', system-ui, sans-serif;
           color: #c8bfaf;
         }
 
@@ -1373,7 +1468,7 @@ export default function Mycelium() {
           margin-bottom: 4px;
         }
         .panel-title {
-          font-family: 'Cormorant Garamond', serif;
+          font-family: 'Inter', system-ui, sans-serif;
           font-style: italic;
           font-size: 22px;
           color: #e8c46b;
@@ -1392,6 +1487,30 @@ export default function Mycelium() {
         }
         .x-btn:hover { color: #e8c46b; border-color: #e8c46b; }
 
+        .undo-btn {
+          background: #14110e;
+          border: 1px solid #3a3530;
+          color: #8a7f6e;
+          padding: 5px 10px;
+          border-radius: 3px;
+          cursor: pointer;
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 9px;
+          letter-spacing: 0.2em;
+          text-transform: uppercase;
+          transition: all 0.15s;
+          line-height: 1;
+        }
+        .undo-btn:hover:not(:disabled) {
+          color: #e8c46b;
+          border-color: #5a4f42;
+          background: #1c1814;
+        }
+        .undo-btn:disabled {
+          opacity: 0.35;
+          cursor: not-allowed;
+        }
+
         .kv {
           display: flex;
           justify-content: space-between;
@@ -1409,7 +1528,7 @@ export default function Mycelium() {
         }
 
         .tier-badge {
-          font-family: 'Cormorant Garamond', serif;
+          font-family: 'Inter', system-ui, sans-serif;
           font-style: italic;
           font-weight: 600;
         }
@@ -1457,7 +1576,7 @@ export default function Mycelium() {
           padding: 10px 12px;
           cursor: pointer;
           color: #d8cfbf;
-          font-family: 'Cormorant Garamond', serif;
+          font-family: 'Inter', system-ui, sans-serif;
           transition: all 0.15s;
         }
         .species-card:hover:not(:disabled) {
@@ -1525,7 +1644,7 @@ export default function Mycelium() {
           color: #e8c46b;
         }
         .game-over .score {
-          font-family: 'Cormorant Garamond', serif;
+          font-family: 'Inter', system-ui, sans-serif;
           font-size: 64px;
           color: #e8c46b;
           font-weight: 600;
@@ -1552,7 +1671,10 @@ export default function Mycelium() {
       <div className="container">
         <header>
           <div>
-            <h1 className="title">Mycelium</h1>
+            <h1 className="title">
+              <span>Mycelium</span>
+              <span className="title-version">v1.0</span>
+            </h1>
             <div className="subtitle">a network of patient threads · year {state.year} of {state.maxYears}</div>
           </div>
           <div className="stats-bar">
@@ -1590,7 +1712,7 @@ export default function Mycelium() {
               <span>
                 {state.pendingEdgeFrom !== null
                   ? `weaving from node ${state.pendingEdgeFrom} — click target or press esc`
-                  : 'click a patch to inspect'}
+                  : 'click to inspect · drag patch to weave · drag map to pan'}
               </span>
             </div>
             <div className="map-inner" ref={mapInnerRef}>
@@ -1645,6 +1767,12 @@ export default function Mycelium() {
                 <g
                   key={n.id}
                   onClick={() => handleNodeClick(n.id)}
+                  onPointerDown={(e) => {
+                    if (n.explored && n.species && !state.gameOver) {
+                      e.stopPropagation();
+                      beginNodeDrag(n.id, e);
+                    }
+                  }}
                   onMouseEnter={() => setHoverNode(n.id)}
                   onMouseLeave={() => setHoverNode(null)}
                   style={{ cursor: n.explored ? 'pointer' : 'default' }}
@@ -1654,8 +1782,8 @@ export default function Mycelium() {
                     netInfo={net[n.id]}
                     isSelected={state.selectedNode === n.id}
                     isHovered={hoverNode === n.id}
-                    isPendingFrom={state.pendingEdgeFrom === n.id}
-                    hoveredFromValid={state.pendingEdgeFrom !== null && hoverNode === n.id && hoveredFromValid}
+                    isPendingFrom={activeWeaveFromId === n.id}
+                    hoveredFromValid={activeWeaveFromId !== null && hoverNode === n.id && hoveredFromValid}
                   />
                 </g>
               ))}
@@ -1666,6 +1794,7 @@ export default function Mycelium() {
               svgRef={svgRef}
               containerRef={mapInnerRef}
               pan={pan}
+              pushHistory={pushHistory}
             />
             </div>
           </div>
@@ -1686,31 +1815,9 @@ export default function Mycelium() {
                 setState={setState}
                 net={net}
                 onClose={() => setState(st => ({ ...st, selectedNode: null }))}
+                pushHistory={pushHistory}
               />
-            ) : (
-              <div className="panel">
-                <div className="panel-head">
-                  <div>
-                    <div className="panel-eyebrow">field guide</div>
-                    <div className="panel-title">Resources</div>
-                  </div>
-                </div>
-                <div className="legend">
-                  {Object.entries(RESOURCES).map(([key, r]) => (
-                    <div key={key} className="legend-row">
-                      <span>
-                        <span style={{ color: r.color, fontSize: 16, marginRight: 8 }}>{r.glyph}</span>
-                        {r.name}
-                      </span>
-                      <span>{key}</span>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ marginTop: 14, fontStyle: 'italic', color: '#8a7f6e', fontSize: 13, lineHeight: 1.5 }}>
-                  Cultivate species on patches. Weave hyphae between them. A thread carries one resource each way — only what one side produces and the other side needs.
-                </div>
-              </div>
-            )}
+            ) : null}
 
             <div className="panel">
               <div className="panel-head">
@@ -1748,6 +1855,15 @@ export default function Mycelium() {
                   <div className="panel-eyebrow">chronicle</div>
                   <div className="panel-title">Field Notes</div>
                 </div>
+                <button
+                  className="undo-btn"
+                  onClick={undo}
+                  disabled={!prevState}
+                  title="Undo last action"
+                  aria-label="Undo last action"
+                >
+                  ↶ Undo
+                </button>
               </div>
               <div className="log">
                 {state.log.map((line, i) => (
