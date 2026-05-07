@@ -3,5 +3,5 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  base: '/mycelium-app/', // match your GitHub repo name exactly
+  base: '/mycelium/', // match your GitHub repo name exactly
 })

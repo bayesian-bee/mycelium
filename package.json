@@ -1,5 +1,5 @@
 {
-  "name": "mycelium-app",
+  "name": "mycelium",
   "private": true,
   "scripts": {
     "dev": "vite",
