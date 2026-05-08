@@ -958,22 +958,21 @@ export default function Mycelium() {
     };
   };
 
-  // Pointer-down on a node: start a potential drag-to-weave. If the pointer
-  // moves past threshold we enter pending-edge mode; if released without
-  // moving, it falls through to a normal click (opens menu / completes
-  // an in-flight pending edge).
+  // Pointer-down on a node: start a potential drag-to-weave. Window-level
+  // pointermove/pointerup (registered in an effect below) drive the drag,
+  // which makes it survive cursor excursions outside the SVG bounds.
   const handleNodePointerDown = (e, nodeId) => {
     if (e.button !== undefined && e.button !== 0) return;
     const node = state.map.nodes[nodeId];
     if (!node?.explored) return;
     e.stopPropagation();
+    e.preventDefault();
     nodeDragRef.current = {
       id: nodeId,
       startX: e.clientX,
       startY: e.clientY,
       moved: false,
     };
-    try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch (err) {}
   };
 
   const handlePointerDown = (e) => {
@@ -992,25 +991,8 @@ export default function Mycelium() {
   };
 
   const handlePointerMove = (e) => {
-    // Drag-to-weave: track movement from a node origin.
-    const ndrag = nodeDragRef.current;
-    if (ndrag) {
-      const dx = e.clientX - ndrag.startX;
-      const dy = e.clientY - ndrag.startY;
-      if (!ndrag.moved && Math.hypot(dx, dy) > 5) {
-        ndrag.moved = true;
-        const src = state.map.nodes[ndrag.id];
-        if (src.species) {
-          setState(st => ({ ...st, pendingEdgeFrom: ndrag.id, selectedNode: null }));
-        }
-      }
-      if (ndrag.moved) {
-        setMousePos(screenToWorld(e.clientX, e.clientY));
-      }
-      return;
-    }
-    // Existing preview update for click-then-click flow.
-    if (state.pendingEdgeFrom !== null && !dragRef.current.active) {
+    // Preview update for click-then-click flow (panel button).
+    if (state.pendingEdgeFrom !== null && !dragRef.current.active && !nodeDragRef.current) {
       setMousePos(screenToWorld(e.clientX, e.clientY));
     }
     // Pan drag.
@@ -1033,14 +1015,37 @@ export default function Mycelium() {
     }
   };
 
-  const handlePointerUp = (e) => {
-    const ndrag = nodeDragRef.current;
-    if (ndrag) {
+  const handlePointerUp = () => {
+    // Only ends pan drag here; node-drag is resolved by the window listener.
+    dragRef.current.active = false;
+  };
+
+  // Window-level listeners for node drag — survives leaving the SVG and
+  // is independent of capture/bubble quirks across browsers.
+  useEffect(() => {
+    const onMove = (e) => {
+      const ndrag = nodeDragRef.current;
+      if (!ndrag) return;
+      const dx = e.clientX - ndrag.startX;
+      const dy = e.clientY - ndrag.startY;
+      if (!ndrag.moved && Math.hypot(dx, dy) > 5) {
+        ndrag.moved = true;
+        const src = state.map.nodes[ndrag.id];
+        if (src?.species) {
+          setState(st => ({ ...st, pendingEdgeFrom: ndrag.id, selectedNode: null }));
+        }
+      }
+      if (ndrag.moved) {
+        setMousePos(screenToWorld(e.clientX, e.clientY));
+      }
+    };
+    const onUp = (e) => {
+      const ndrag = nodeDragRef.current;
+      if (!ndrag) return;
       nodeDragRef.current = null;
       if (ndrag.moved) {
         const src = state.map.nodes[ndrag.id];
-        if (src.species) {
-          // Determine the node under the pointer at release.
+        if (src?.species) {
           const el = document.elementFromPoint(e.clientX, e.clientY);
           const targetG = el?.closest?.('g[data-node-id]');
           const targetId = targetG ? Number(targetG.getAttribute('data-node-id')) : NaN;
@@ -1057,13 +1062,24 @@ export default function Mycelium() {
           }
         }
       } else {
-        // No movement — treat as a click on the node.
         handleNodeClick(ndrag.id);
       }
-      return;
-    }
-    dragRef.current.active = false;
-  };
+    };
+    const onCancel = () => {
+      if (nodeDragRef.current) {
+        nodeDragRef.current = null;
+        setState(st => ({ ...st, pendingEdgeFrom: null }));
+      }
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+    };
+  }, [state, pan]);
 
   const cancelEdge = () => setState(st => ({ ...st, pendingEdgeFrom: null }));
 
