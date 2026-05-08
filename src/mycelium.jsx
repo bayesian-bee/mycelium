@@ -433,14 +433,21 @@ function EdgeGraphic({ from, to, flow }) {
   );
 }
 
-// Edge preview while dragging
+// Edge preview while dragging — renders on top of nodes for clear visibility.
 function PreviewEdge({ from, to, valid }) {
+  const color = valid ? '#a8d49a' : '#c46a5a';
   return (
-    <line x1={from.x} y1={from.y} x2={to.x} y2={to.y}
-      stroke={valid ? '#a8d49a' : '#c46a5a'}
-      strokeWidth={2}
-      strokeDasharray="5 4"
-      opacity={0.7} />
+    <g style={{ pointerEvents: 'none', filter: `drop-shadow(0 0 6px ${color}aa)` }}>
+      <line x1={from.x} y1={from.y} x2={to.x} y2={to.y}
+        stroke={color}
+        strokeWidth={2.5}
+        strokeDasharray="6 5"
+        strokeLinecap="round"
+        opacity={0.95} />
+      <circle cx={to.x} cy={to.y} r={3.5}
+        fill={color}
+        opacity={0.85} />
+    </g>
   );
 }
 
@@ -855,6 +862,8 @@ export default function Mycelium() {
   const [showHelp, setShowHelp] = useState(false);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const dragRef = useRef({ active: false, moved: false, startX: 0, startY: 0, startPan: { x: 0, y: 0 } });
+  // Node-originated drag (drag-to-weave-hypha). Independent of dragRef which is for map panning.
+  const nodeDragRef = useRef(null);
   const svgRef = useRef(null);
   const mapInnerRef = useRef(null);
 
@@ -949,8 +958,26 @@ export default function Mycelium() {
     };
   };
 
+  // Pointer-down on a node: start a potential drag-to-weave. If the pointer
+  // moves past threshold we enter pending-edge mode; if released without
+  // moving, it falls through to a normal click (opens menu / completes
+  // an in-flight pending edge).
+  const handleNodePointerDown = (e, nodeId) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    const node = state.map.nodes[nodeId];
+    if (!node?.explored) return;
+    e.stopPropagation();
+    nodeDragRef.current = {
+      id: nodeId,
+      startX: e.clientX,
+      startY: e.clientY,
+      moved: false,
+    };
+    try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch (err) {}
+  };
+
   const handlePointerDown = (e) => {
-    // Only initiate pan on background (not on a node — node handlers stop propagation in their own way)
+    // Background pan (only fires when not on a node — node handlers stopPropagation).
     if (e.button !== undefined && e.button !== 0) return;
     dragRef.current = {
       active: true,
@@ -965,11 +992,28 @@ export default function Mycelium() {
   };
 
   const handlePointerMove = (e) => {
-    // Update preview line position when weaving
+    // Drag-to-weave: track movement from a node origin.
+    const ndrag = nodeDragRef.current;
+    if (ndrag) {
+      const dx = e.clientX - ndrag.startX;
+      const dy = e.clientY - ndrag.startY;
+      if (!ndrag.moved && Math.hypot(dx, dy) > 5) {
+        ndrag.moved = true;
+        const src = state.map.nodes[ndrag.id];
+        if (src.species) {
+          setState(st => ({ ...st, pendingEdgeFrom: ndrag.id, selectedNode: null }));
+        }
+      }
+      if (ndrag.moved) {
+        setMousePos(screenToWorld(e.clientX, e.clientY));
+      }
+      return;
+    }
+    // Existing preview update for click-then-click flow.
     if (state.pendingEdgeFrom !== null && !dragRef.current.active) {
       setMousePos(screenToWorld(e.clientX, e.clientY));
     }
-    // Pan drag
+    // Pan drag.
     if (dragRef.current.active) {
       const dx = e.clientX - dragRef.current.startX;
       const dy = e.clientY - dragRef.current.startY;
@@ -980,7 +1024,6 @@ export default function Mycelium() {
         const rect = svgRef.current.getBoundingClientRect();
         const scaleX = state.map.width / rect.width;
         const scaleY = state.map.height / rect.height;
-        // Clamp pan so map stays in view: pan in [-mapW/2, mapW/2] roughly
         const maxPan = 400;
         setPan({
           x: Math.max(-maxPan, Math.min(maxPan, dragRef.current.startPan.x - dx * scaleX)),
@@ -991,6 +1034,34 @@ export default function Mycelium() {
   };
 
   const handlePointerUp = (e) => {
+    const ndrag = nodeDragRef.current;
+    if (ndrag) {
+      nodeDragRef.current = null;
+      if (ndrag.moved) {
+        const src = state.map.nodes[ndrag.id];
+        if (src.species) {
+          // Determine the node under the pointer at release.
+          const el = document.elementFromPoint(e.clientX, e.clientY);
+          const targetG = el?.closest?.('g[data-node-id]');
+          const targetId = targetG ? Number(targetG.getAttribute('data-node-id')) : NaN;
+          if (Number.isFinite(targetId) && targetId !== ndrag.id && canConnect(ndrag.id, targetId)) {
+            setState(st => ({
+              ...st,
+              edges: [...st.edges, { from: ndrag.id, to: targetId }],
+              nutrients: st.nutrients - 5,
+              pendingEdgeFrom: null,
+              log: [`Wove a hypha (${ndrag.id} ↔ ${targetId}).`, ...st.log].slice(0, 6),
+            }));
+          } else {
+            setState(st => ({ ...st, pendingEdgeFrom: null }));
+          }
+        }
+      } else {
+        // No movement — treat as a click on the node.
+        handleNodeClick(ndrag.id);
+      }
+      return;
+    }
     dragRef.current.active = false;
   };
 
@@ -1656,20 +1727,12 @@ export default function Mycelium() {
                 />
               ))}
 
-              {/* Preview edge */}
-              {pendingFromNode && mousePos && (
-                <PreviewEdge
-                  from={pendingFromNode}
-                  to={hoverNodeObj || mousePos}
-                  valid={hoverNodeObj ? hoveredFromValid : true}
-                />
-              )}
-
               {/* Nodes */}
               {state.map.nodes.map(n => (
                 <g
                   key={n.id}
-                  onClick={() => handleNodeClick(n.id)}
+                  data-node-id={n.id}
+                  onPointerDown={(e) => handleNodePointerDown(e, n.id)}
                   onMouseEnter={() => setHoverNode(n.id)}
                   onMouseLeave={() => setHoverNode(null)}
                   style={{ cursor: n.explored ? 'pointer' : 'default' }}
@@ -1684,6 +1747,15 @@ export default function Mycelium() {
                   />
                 </g>
               ))}
+
+              {/* Preview edge — drawn last so it stays on top of nodes */}
+              {pendingFromNode && mousePos && (
+                <PreviewEdge
+                  from={pendingFromNode}
+                  to={hoverNodeObj || mousePos}
+                  valid={hoverNodeObj ? hoveredFromValid : true}
+                />
+              )}
             </svg>
             <PatchMenu
               state={state}
