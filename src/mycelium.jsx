@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import packageJson from '../package.json';
+
+const VERSION = packageJson.version;
 
 // ============================================================
 // MYCELIUM — a Slipways-inspired root-network strategy game
@@ -10,9 +13,10 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 //   nitrogen (from nitrogen-fixing patches / decay)
 //   spore   (cultural / "people" analog — spreads identity)
 //
-// Each patch has a finite production capacity: 1 or 2 units of its
-// resource per cycle. No two species form a closed dyad — every
-// self-sustaining loop requires at least three patches.
+// Five biomes, five resources. Each biome can grow three different paths
+// (primary, secondary, tertiary), each producing a different resource at a
+// different rate. No two species form a closed dyad — every self-sustaining
+// loop requires at least three patches (and most require more).
 //
 // Each hypha (edge) carries 1 unit. Threads cannot cross.
 
@@ -25,16 +29,45 @@ const RESOURCES = {
   spore:    { glyph: '✺', color: '#d4a8d4', name: 'spore' },
 };
 
+// Each of the five biomes has a primary, secondary, and tertiary resource —
+// every resource fills each of those roles for exactly one biome:
+//   sunny  → sugar (P) · spore (S) · mineral (T)
+//   damp   → water (P) · sugar (S) · nitrogen (T)
+//   rocky  → mineral (P) · nitrogen (S) · water (T)
+//   loamy  → nitrogen (P) · water (S) · spore (T)
+//   mossy  → spore (P) · mineral (S) · sugar (T)
+// Each biome offers three resource paths plus a Hyphal Lab science option.
+//   primary path:   2 inputs → 3 of primary resource
+//   secondary path: 1 input  → 1 of secondary resource
+//   tertiary path:  2 inputs → 1 of tertiary resource
 const SPECIES = {
-  cordyceps:   { biomes: ['sunny'],         name: 'Cordyceps Grove', produces: 'sugar',    needs: ['water', 'mineral'] },
-  sunlichen:   { biomes: ['sunny'],         name: 'Sun Lichen',      produces: 'sugar',    needs: ['mineral'] },
-  marshveil:   { biomes: ['damp'],          name: 'Marsh Veil',      produces: 'water',    needs: ['sugar'] },
-  bogcap:      { biomes: ['damp'],          name: 'Bog Cap',         produces: 'water',    needs: ['nitrogen'] },
-  stonebreak:  { biomes: ['rocky'],         name: 'Stonebreaker',    produces: 'mineral',  needs: ['water'] },
-  crystalcap:  { biomes: ['rocky'],         name: 'Crystal Cap',     produces: 'mineral',  needs: ['sugar', 'nitrogen'] },
-  decaycourt:  { biomes: ['loamy'],         name: 'Decay Court',     produces: 'nitrogen', needs: ['sugar'] },
-  sporehall:   { biomes: ['loamy'],         name: 'Spore Hall',      produces: 'spore',    needs: ['sugar', 'water'] },
-  hyphallab:   { biomes: ['sunny','damp','rocky','loamy'], name: 'Hyphal Lab', produces: 'science', needs: ['any'] },
+  // Sunny — sugar primary, spore secondary, mineral tertiary
+  cordyceps:    { biomes: ['sunny'], name: 'Cordyceps Grove', produces: 'sugar',    needs: ['water', 'mineral'],    outputs: 3, role: 'primary' },
+  sunlichen:    { biomes: ['sunny'], name: 'Sun Lichen',      produces: 'spore',    needs: ['mineral'],             outputs: 1, role: 'secondary' },
+  sunsalt:      { biomes: ['sunny'], name: 'Sun Salt',        produces: 'mineral',  needs: ['nitrogen', 'spore'],   outputs: 1, role: 'tertiary' },
+
+  // Damp — water primary, sugar secondary, nitrogen tertiary
+  marshveil:    { biomes: ['damp'],  name: 'Marsh Veil',      produces: 'water',    needs: ['mineral', 'nitrogen'], outputs: 3, role: 'primary' },
+  bogalgae:     { biomes: ['damp'],  name: 'Bog Algae',       produces: 'sugar',    needs: ['nitrogen'],            outputs: 1, role: 'secondary' },
+  bogcap:       { biomes: ['damp'],  name: 'Bog Cap',         produces: 'nitrogen', needs: ['mineral', 'spore'],    outputs: 1, role: 'tertiary' },
+
+  // Rocky — mineral primary, nitrogen secondary, water tertiary
+  stonebreak:   { biomes: ['rocky'], name: 'Stonebreaker',    produces: 'mineral',  needs: ['water', 'nitrogen'],   outputs: 3, role: 'primary' },
+  crystalcap:   { biomes: ['rocky'], name: 'Crystal Cap',     produces: 'nitrogen', needs: ['spore'],               outputs: 1, role: 'secondary' },
+  rockspring:   { biomes: ['rocky'], name: 'Rock Spring',     produces: 'water',    needs: ['sugar', 'spore'],      outputs: 1, role: 'tertiary' },
+
+  // Loamy — nitrogen primary, water secondary, spore tertiary
+  decaycourt:   { biomes: ['loamy'], name: 'Decay Court',     produces: 'nitrogen', needs: ['water', 'spore'],      outputs: 3, role: 'primary' },
+  loamtap:      { biomes: ['loamy'], name: 'Loam Tap',        produces: 'water',    needs: ['sugar'],               outputs: 1, role: 'secondary' },
+  sporehall:    { biomes: ['loamy'], name: 'Spore Hall',      produces: 'spore',    needs: ['sugar', 'mineral'],    outputs: 1, role: 'tertiary' },
+
+  // Mossy — spore primary, mineral secondary, sugar tertiary
+  mycelialbloom:{ biomes: ['mossy'], name: 'Mycelial Bloom',  produces: 'spore',    needs: ['sugar', 'water'],      outputs: 3, role: 'primary' },
+  mosscrust:    { biomes: ['mossy'], name: 'Moss Crust',      produces: 'mineral',  needs: ['water'],               outputs: 1, role: 'secondary' },
+  sugarcap:     { biomes: ['mossy'], name: 'Sugar Cap',       produces: 'sugar',    needs: ['nitrogen', 'mineral'], outputs: 1, role: 'tertiary' },
+
+  // Hyphal Lab — science conversion, available on every biome
+  hyphallab:    { biomes: ['sunny','damp','rocky','loamy','mossy'], name: 'Hyphal Lab', produces: 'science', needs: ['any'], outputs: 0, role: 'lab' },
 };
 
 const BIOME_TINT = {
@@ -42,6 +75,15 @@ const BIOME_TINT = {
   damp:  '#6b9bb0',
   rocky: '#9c8d78',
   loamy: '#8a7456',
+  mossy: '#7a9c6a',
+};
+
+const BIOME_GLYPH = {
+  sunny: '☀',
+  damp:  '◉',
+  rocky: '◆',
+  loamy: '✦',
+  mossy: '❋',
 };
 
 // ---------- RNG ----------
@@ -73,7 +115,7 @@ function generateMap(seed) {
   const W = 1000, H = 700;
   const N_NODES = 18;
   const MIN_DIST = 110;
-  const biomes = ['sunny', 'damp', 'rocky', 'loamy'];
+  const biomes = ['sunny', 'damp', 'rocky', 'loamy', 'mossy'];
 
   const nodes = [];
   let attempts = 0;
@@ -89,7 +131,7 @@ function generateMap(seed) {
         species: null,        // key from SPECIES once colonized
         produces: null,       // resource key
         needs: [],            // [resourceKey, ...]
-        capacity: rng() < 0.5 ? 1 : 2, // max units of its resource produced per cycle
+        outputs: 0,           // copied from species when colonized; export cap per cycle
         explored: false,
         // wobble for hand-drawn feel
         jitter: rng() * Math.PI * 2,
@@ -156,7 +198,7 @@ function computeNetwork(state) {
       const bAccepts = aProd && (B.needs.includes(aProd) || (B.species === 'hyphallab' && aProd !== 'science'));
       if (bAccepts
           && !result[B.id].imports.includes(aProd)
-          && result[A.id].exports.length < (A.capacity ?? 1)) {
+          && result[A.id].exports.length < (A.outputs ?? 0)) {
         result[B.id].imports.push(aProd);
         result[A.id].exports.push(aProd);
         edgeFlows[i].fwd = aProd;
@@ -165,7 +207,7 @@ function computeNetwork(state) {
       const aAccepts = bProd && (A.needs.includes(bProd) || (A.species === 'hyphallab' && bProd !== 'science'));
       if (aAccepts
           && !result[A.id].imports.includes(bProd)
-          && result[B.id].exports.length < (B.capacity ?? 1)) {
+          && result[B.id].exports.length < (B.outputs ?? 0)) {
         result[A.id].imports.push(bProd);
         result[B.id].exports.push(bProd);
         edgeFlows[i].rev = bProd;
@@ -173,11 +215,12 @@ function computeNetwork(state) {
     }
   }
 
-  // Tier thresholds tuned for the capacity-1/2 economy:
+  // Tier thresholds:
+  //   Unsustained — needs not met
   //   Sprouting   — needs satisfied
   //   Thriving    — needs satisfied + at least one export delivered
   //   Flourishing — satisfied + 2 exports + 2 imports + 2 thriving neighbors
-  //                 (only reachable by 2-need species on capacity-2 patches)
+  //                 (typically reached by primary paths)
   for (const n of nodes) {
     if (!n.species) { result[n.id].tier = 0; continue; }
     const r = result[n.id];
@@ -275,8 +318,7 @@ function NodeGraphic({ node, netInfo, isSelected, isHovered, isPendingFrom, hove
     if (tier === 3) ringColor = '#e8c46b';
     else if (tier === 2) ringColor = '#9ec48a';
     else if (tier === 1) ringColor = '#7a9c6a';
-    else if (netInfo && !netInfo.satisfied && (netInfo.imports.length < node.needs.length)) ringColor = '#c46a5a';
-    else ringColor = '#5a5048';
+    else ringColor = '#d48a7a'; // Unsustained — light red
   }
 
   // Interaction overlay
@@ -364,18 +406,17 @@ function NodeGraphic({ node, netInfo, isSelected, isHovered, isPendingFrom, hove
       {!colonized && (
         <text x={node.x} y={node.y + 5} textAnchor="middle"
           fontSize={16} fill={biomeColor} opacity={0.8}>
-          {node.biome === 'sunny' ? '☀' : node.biome === 'damp' ? '◉' : node.biome === 'rocky' ? '◆' : '✦'}
+          {BIOME_GLYPH[node.biome] || '·'}
         </text>
       )}
-      {/* capacity dots (richness of the patch) */}
-      {Array.from({ length: node.capacity || 1 }).map((_, i) => {
-        const cap = node.capacity || 1;
-        const offset = (i - (cap - 1) / 2) * 5;
-        const dotColor = colonized
-          ? (node.produces === 'science' ? '#e8c46b' : RESOURCES[node.produces]?.color)
-          : biomeColor;
+      {/* output dots — only on colonized patches; one dot per unit produced per cycle */}
+      {colonized && node.outputs > 0 && Array.from({ length: node.outputs }).map((_, i) => {
+        const offset = (i - (node.outputs - 1) / 2) * 5;
+        const dotColor = node.produces === 'science'
+          ? '#e8c46b'
+          : RESOURCES[node.produces]?.color || '#d8cfbf';
         return (
-          <circle key={`cap-${i}`}
+          <circle key={`out-${i}`}
             cx={node.x + offset} cy={node.y + radius - 7}
             r={1.6} fill={dotColor} opacity={0.85} />
         );
@@ -497,7 +538,7 @@ function PatchMenu({ state, setState, svgRef, containerRef, pan }) {
     }
     setState(st => {
       const nodes = st.map.nodes.map((n, i) =>
-        i === node.id ? { ...n, species: key, produces: s.produces, needs: [...s.needs] } : n
+        i === node.id ? { ...n, species: key, produces: s.produces, needs: [...s.needs], outputs: s.outputs ?? 0 } : n
       );
       const REVEAL_R = 240;
       const newNodes = nodes.map(n =>
@@ -549,18 +590,21 @@ function PatchMenu({ state, setState, svgRef, containerRef, pan }) {
     <>
       <div className="patch-menu" style={{ left: x, top: y, width: W }}>
         <div className="patch-menu-head">
-          <span>{node.biome} · ×{node.capacity}/cycle · 15n</span>
+          <span>{node.biome} · 15n</span>
           <button onClick={() => setState(st => ({ ...st, selectedNode: null }))}>×</button>
         </div>
         {options.map(([key, s]) => {
           const cost = s.produces === 'science' ? 25 : 15;
           const afford = state.nutrients >= cost;
+          const outColor = s.produces === 'science' ? '#e8c46b' : RESOURCES[s.produces]?.color;
+          const outGlyph = s.produces === 'science' ? '✦' : RESOURCES[s.produces]?.glyph;
           return (
             <button
               key={key}
               className="patch-menu-row"
               onClick={() => colonize(key)}
               disabled={!afford}
+              title={s.role ? `${s.role} path` : ''}
             >
               <span className="pm-name">{s.name}</span>
               <span className="pm-flow">
@@ -570,9 +614,10 @@ function PatchMenu({ state, setState, svgRef, containerRef, pan }) {
                   </span>
                 ))}
                 <span className="pm-arr">→</span>
-                <span style={{ color: s.produces === 'science' ? '#e8c46b' : RESOURCES[s.produces]?.color }}>
-                  {s.produces === 'science' ? '✦' : RESOURCES[s.produces]?.glyph}
-                </span>
+                {(s.outputs ?? 0) > 1 && (
+                  <span className="pm-mult" style={{ color: outColor }}>{s.outputs}×</span>
+                )}
+                <span style={{ color: outColor }}>{outGlyph}</span>
                 {cost === 25 && <span className="pm-cost">25n</span>}
               </span>
             </button>
@@ -603,7 +648,7 @@ function NodePanel({ state, setState, net, onClose }) {
     setState(st => {
       const nodes = st.map.nodes.map((n, i) =>
         i === node.id
-          ? { ...n, species: key, produces: s.produces, needs: [...s.needs] }
+          ? { ...n, species: key, produces: s.produces, needs: [...s.needs], outputs: s.outputs ?? 0 }
           : n
       );
       // Reveal neighbors within range
@@ -642,10 +687,17 @@ function NodePanel({ state, setState, net, onClose }) {
           <div className="kv">
             <span>produces</span>
             <span>
+              {node.outputs > 0 && (
+                <span style={{ color: '#7a6f5e', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, marginRight: 6 }}>
+                  {node.outputs}×
+                </span>
+              )}
               <ResourceGlyph res={node.produces} size={16} /> {node.produces}
-              <span style={{ color: '#7a6f5e', fontFamily: 'JetBrains Mono, monospace', fontSize: 10, marginLeft: 8 }}>
-                ×{node.capacity}/cycle
-              </span>
+              {SPECIES[node.species]?.role && SPECIES[node.species].role !== 'lab' && (
+                <span style={{ color: '#7a6f5e', fontFamily: 'JetBrains Mono, monospace', fontSize: 9, letterSpacing: '0.15em', marginLeft: 8, textTransform: 'uppercase' }}>
+                  {SPECIES[node.species].role}
+                </span>
+              )}
             </span>
           </div>
           <div className="kv">
@@ -664,7 +716,7 @@ function NodePanel({ state, setState, net, onClose }) {
           <div className="kv">
             <span>tier</span>
             <span className="tier-badge" data-tier={r.tier}>
-              {['Dormant', 'Sprouting', 'Thriving', 'Flourishing'][r.tier]}
+              {['Unsustained', 'Sprouting', 'Thriving', 'Flourishing'][r.tier]}
             </span>
           </div>
           <div className="kv">
@@ -678,26 +730,30 @@ function NodePanel({ state, setState, net, onClose }) {
       ) : (
         <>
           <div className="hint">
-            Yields <span style={{ color: '#d8cfbf' }}>×{node.capacity}</span> per cycle. Choose a species to cultivate (cost: 15 nutrients).
+            Three resource paths grow on this {node.biome} patch (15 nutrients each). Choose one.
           </div>
           <div className="species-grid">
             {colonizeOptions.map(([key, s]) => (
               <button key={key} className="species-card"
                 onClick={() => colonize(key)}
                 disabled={state.nutrients < (s.produces === 'science' ? 25 : 15)}>
-                <div className="species-name">{s.name}</div>
-                <div className="species-flow">
-                  <span>
-                    {s.needs.map((need, i) => (
-                      <ResourceGlyph key={i} res={need} size={13} />
-                    ))}
-                  </span>
+                <span className="species-name">{s.name}</span>
+                {s.role && s.role !== 'lab' && (
+                  <span className="species-role">{s.role[0]}</span>
+                )}
+                <span className="species-flow">
+                  {s.needs.map((need, i) => (
+                    <ResourceGlyph key={i} res={need} size={12} />
+                  ))}
                   <span className="arrow">→</span>
-                  <span><ResourceGlyph res={s.produces} size={15} /></span>
-                </div>
-                <div className="species-cost">
-                  {s.produces === 'science' ? '25' : '15'} nutrients
-                </div>
+                  {(s.outputs ?? 0) > 1 && (
+                    <span className="species-mult">{s.outputs}×</span>
+                  )}
+                  <ResourceGlyph res={s.produces} size={13} />
+                </span>
+                <span className="species-cost">
+                  {s.produces === 'science' ? '25n' : '15n'}
+                </span>
               </button>
             ))}
           </div>
@@ -755,54 +811,63 @@ function HelpModal({ onClose }) {
             {/* arrow */}
             <path d="M 140 120 L 195 120" stroke="#5a4f42" strokeWidth="1.5" markerEnd="url(#arr)" fill="none" />
 
-            {/* Step 2: colonized — Sun Lichen needs mineral, makes sugar */}
+            {/* Step 2: colonized — Sun Lichen (secondary path) takes mineral, makes spore */}
             <text x="284" y="80" textAnchor="middle" fontSize="11" fill="#b8a890" opacity="0.9" style={{ filter: 'drop-shadow(0 0 2px #b8a89088)' }}>◆</text>
             <circle cx="290" cy="120" r="26" fill="#d4b86a" opacity="0.18" />
             <circle cx="290" cy="120" r="22" fill="#1f1a16" stroke="#7a9c6a" strokeWidth="2" />
-            <text x="290" y="126" textAnchor="middle" fontSize="22" fill="#f4c95d" style={{ filter: 'drop-shadow(0 0 4px #f4c95d88)' }}>☀</text>
+            <text x="290" y="126" textAnchor="middle" fontSize="22" fill="#d4a8d4" style={{ filter: 'drop-shadow(0 0 4px #d4a8d488)' }}>✺</text>
             <text x="290" y="180" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="13" fill="#e8c46b">Sun Lichen</text>
-            <text x="290" y="198" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">needs ◆ · makes ☀</text>
+            <text x="290" y="198" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">needs ◆ · makes ✺</text>
 
             {/* arrow */}
             <path d="M 335 120 L 390 120" stroke="#5a4f42" strokeWidth="1.5" markerEnd="url(#arr)" fill="none" />
 
-            {/* Step 3: connected triangle (Sun Lichen, Marsh Veil, Stonebreaker) */}
-            {/* Sun Lichen (top) */}
-            <circle cx="485" cy="95" r="18" fill="#1f1a16" stroke="#9ec48a" strokeWidth="2" />
-            <text x="485" y="101" textAnchor="middle" fontSize="18" fill="#f4c95d" style={{ filter: 'drop-shadow(0 0 4px #f4c95d88)' }}>☀</text>
-            {/* Marsh Veil (bottom-left) */}
-            <circle cx="450" cy="148" r="18" fill="#1f1a16" stroke="#9ec48a" strokeWidth="2" />
-            <text x="450" y="154" textAnchor="middle" fontSize="18" fill="#7fb8d6" style={{ filter: 'drop-shadow(0 0 4px #7fb8d688)' }}>◉</text>
-            {/* Stonebreaker (bottom-right) */}
-            <circle cx="520" cy="148" r="18" fill="#1f1a16" stroke="#9ec48a" strokeWidth="2" />
-            <text x="520" y="154" textAnchor="middle" fontSize="18" fill="#b8a890" style={{ filter: 'drop-shadow(0 0 4px #b8a89088)' }}>◆</text>
+            {/* Step 3: a primary feeds two neighbors at once */}
+            {/* Stonebreaker (left) — primary, 3 mineral */}
+            <circle cx="430" cy="120" r="20" fill="#9c8d78" opacity="0.18" />
+            <circle cx="430" cy="120" r="18" fill="#1f1a16" stroke="#9ec48a" strokeWidth="2" />
+            <text x="430" y="126" textAnchor="middle" fontSize="18" fill="#b8a890" style={{ filter: 'drop-shadow(0 0 4px #b8a89088)' }}>◆</text>
+            <circle cx="425" cy="135" r="1.5" fill="#b8a890" />
+            <circle cx="430" cy="135" r="1.5" fill="#b8a890" />
+            <circle cx="435" cy="135" r="1.5" fill="#b8a890" />
+            {/* Sun Lichen (top right) — secondary, 1 spore */}
+            <circle cx="510" cy="95" r="20" fill="#d4b86a" opacity="0.18" />
+            <circle cx="510" cy="95" r="18" fill="#1f1a16" stroke="#9ec48a" strokeWidth="2" />
+            <text x="510" y="101" textAnchor="middle" fontSize="18" fill="#d4a8d4" style={{ filter: 'drop-shadow(0 0 4px #d4a8d488)' }}>✺</text>
+            <circle cx="510" cy="110" r="1.5" fill="#d4a8d4" />
+            {/* Crystal Cap (bottom right) — secondary, 1 nitrogen */}
+            <circle cx="510" cy="145" r="20" fill="#9c8d78" opacity="0.18" />
+            <circle cx="510" cy="145" r="18" fill="#1f1a16" stroke="#9ec48a" strokeWidth="2" />
+            <text x="510" y="151" textAnchor="middle" fontSize="18" fill="#a8d49a" style={{ filter: 'drop-shadow(0 0 4px #a8d49a88)' }}>✿</text>
+            <circle cx="510" cy="160" r="1.5" fill="#a8d49a" />
 
-            {/* Sun Lichen → Marsh Veil (sugar) */}
-            <path d="M 477 110 L 458 134" stroke="#5a4f42" strokeWidth="2.5" fill="none" strokeLinecap="round" />
-            <circle r="3" fill="#f4c95d" style={{ filter: 'drop-shadow(0 0 4px #f4c95d)' }}>
-              <animateMotion dur="3s" repeatCount="indefinite" path="M 477 110 L 458 134" />
-            </circle>
-            {/* Marsh Veil → Stonebreaker (water) */}
-            <path d="M 468 148 L 502 148" stroke="#5a4f42" strokeWidth="2.5" fill="none" strokeLinecap="round" />
-            <circle r="3" fill="#7fb8d6" style={{ filter: 'drop-shadow(0 0 4px #7fb8d6)' }}>
-              <animateMotion dur="3s" repeatCount="indefinite" path="M 468 148 L 502 148" />
-            </circle>
             {/* Stonebreaker → Sun Lichen (mineral) */}
-            <path d="M 512 134 L 493 110" stroke="#5a4f42" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+            <path d="M 446 110 L 494 100" stroke="#5a4f42" strokeWidth="2.5" fill="none" strokeLinecap="round" />
             <circle r="3" fill="#b8a890" style={{ filter: 'drop-shadow(0 0 4px #b8a890)' }}>
-              <animateMotion dur="3s" repeatCount="indefinite" path="M 512 134 L 493 110" />
+              <animateMotion dur="3s" repeatCount="indefinite" path="M 446 110 L 494 100" />
+            </circle>
+            {/* Stonebreaker → Crystal Cap (mineral) — wait Crystal Cap needs spore not mineral */}
+            {/* Sun Lichen → Crystal Cap (spore) */}
+            <path d="M 510 113 L 510 127" stroke="#5a4f42" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+            <circle r="3" fill="#d4a8d4" style={{ filter: 'drop-shadow(0 0 4px #d4a8d4)' }}>
+              <animateMotion dur="3s" repeatCount="indefinite" path="M 510 113 L 510 127" />
+            </circle>
+            {/* Crystal Cap → Stonebreaker (nitrogen) */}
+            <path d="M 494 140 L 446 130" stroke="#5a4f42" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+            <circle r="3" fill="#a8d49a" style={{ filter: 'drop-shadow(0 0 4px #a8d49a)' }}>
+              <animateMotion dur="3s" repeatCount="indefinite" path="M 494 140 L 446 130" />
             </circle>
 
-            <text x="485" y="190" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="13" fill="#9ec48a">Sprouting cycle</text>
-            <text x="485" y="206" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">three species fuel each other</text>
+            <text x="485" y="190" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="13" fill="#9ec48a">Resources circulate</text>
+            <text x="485" y="206" textAnchor="middle" fontFamily="Cormorant Garamond, serif" fontStyle="italic" fontSize="11" fill="#6a5f4e">primaries fuel two neighbors at a time</text>
           </svg>
           <div className="diagram-caption">inspect · cultivate · weave</div>
         </div>
 
         <ul>
-          <li><strong>Click any explored patch</strong> to inspect it. The biome glyph (☀ sunny, ◉ damp, ◆ rocky, ✦ loamy) tells you which species can grow there.</li>
+          <li><strong>Click any explored patch</strong> to inspect it. The biome glyph (☀ sunny, ◉ damp, ◆ rocky, ✦ loamy, ❋ mossy) tells you which species can grow there.</li>
           <li><strong>Cultivate a species</strong> by picking from the menu (15 nutrients; 25 for a Hyphal Lab). Cultivation reveals nearby patches.</li>
-          <li><strong>Weave a hypha</strong> from any colonized patch (5 nutrients). Threads can't cross each other and have a maximum length.</li>
+          <li><strong>Weave a hypha</strong> by dragging from a colonized patch to another (5 nutrients), or click and click. Threads can't cross each other and have a maximum length.</li>
           <li><strong>Pass the year</strong> to collect income, advance time, and produce science from labs.</li>
         </ul>
 
@@ -812,12 +877,6 @@ function HelpModal({ onClose }) {
           patch <em>produces</em> exactly what the other <em>needs</em>. If neither side can satisfy the other, the
           thread is dead weight.
         </p>
-        <p>
-          Each patch has a <strong>finite yield</strong> — shown as small dots inside the node — of either
-          1 or 2 units per cycle. A patch with capacity 2 can fuel two hungry neighbors at once; capacity 1 must
-          choose. No two species can fully fuel each other on their own, so every self-sustaining loop needs at
-          least three patches.
-        </p>
         <div className="res-row">
           <span><span style={{ color: '#f4c95d' }}>☀</span> sugar</span>
           <span><span style={{ color: '#7fb8d6' }}>◉</span> water</span>
@@ -826,21 +885,36 @@ function HelpModal({ onClose }) {
           <span><span style={{ color: '#d4a8d4' }}>✺</span> spore</span>
         </div>
 
+        <h3>Patches and paths</h3>
+        <p>
+          Five biomes — sunny (☀), damp (◉), rocky (◆), loamy (✦), and mossy (❋) — each specialize in a different
+          resource. Every biome offers <strong>three resource paths</strong>:
+        </p>
+        <ul>
+          <li><strong>Primary path</strong> — consumes <em>two</em> different resources and yields <strong>3</strong> of the patch's primary resource per cycle. The most productive option, but it needs two streams of input.</li>
+          <li><strong>Secondary path</strong> — consumes <em>one</em> resource and yields <strong>1</strong> of the patch's secondary resource. Cheap to fuel, modest output.</li>
+          <li><strong>Tertiary path</strong> — consumes <em>two</em> different resources and yields <strong>1</strong> of the patch's tertiary resource. A specialty conversion.</li>
+        </ul>
+        <p>
+          Every resource is the primary of one biome, the secondary of another, and the tertiary of a third — so any
+          resource can be sourced three different ways. No two species fully fuel each other on their own, so every
+          self-sustaining loop needs at least three patches.
+        </p>
+
         <h3>Growth tiers</h3>
         <ul>
-          <li><span style={{ color: '#6a5f4e', fontStyle: 'italic' }}>Dormant</span> — colonized but unmet needs. Earns penalties.</li>
+          <li><span style={{ color: '#d48a7a', fontStyle: 'italic' }}>Unsustained</span> — colonized but unmet needs. Earns penalties.</li>
           <li><span style={{ color: '#7a9c6a', fontStyle: 'italic' }}>Sprouting</span> — all needs satisfied.</li>
           <li><span style={{ color: '#9ec48a', fontStyle: 'italic' }}>Thriving</span> — needs satisfied + at least one export delivered.</li>
-          <li><span style={{ color: '#e8c46b', fontStyle: 'italic' }}>Flourishing</span> — needs satisfied + 2 imports + 2 exports + 2 thriving neighbors. Requires a capacity-2 patch growing a two-need species.</li>
+          <li><span style={{ color: '#e8c46b', fontStyle: 'italic' }}>Flourishing</span> — needs satisfied + 2 imports + 2 exports + 2 thriving neighbors. Reachable by a primary path with a full network.</li>
         </ul>
 
         <h3>Strategy</h3>
         <ul>
-          <li>The cheapest <strong>self-sustaining loop</strong> is a triangle: Sun Lichen (☀) ← Stonebreaker (◆) ← Marsh Veil (◉) ← Sun Lichen. Each feeds the next.</li>
-          <li>Watch the capacity dots — capacity-2 patches are precious, since only they can reach Flourishing and only they can fuel two neighbors at once.</li>
-          <li>Add a Decay Court for nitrogen, then attempt the demanding species (Crystal Cap, Spore Hall) once you have spare resources.</li>
+          <li>Secondary paths form a cheap five-step ring (sugar → water → mineral → spore → nitrogen → sugar) that bootstraps a small network — each link satisfies the next.</li>
+          <li>Once a few feeds exist, plant a primary path on a well-positioned patch — its 3-unit output can fuel multiple neighbors at once.</li>
           <li>Hyphal Labs accept any one resource and convert it to <span style={{ color: '#e8c46b' }}>✦ science</span>, which boosts your final score.</li>
-          <li>Final score = <em>raw points × network health</em>. Leaving lots of patches Dormant tanks your multiplier.</li>
+          <li>Final score = <em>raw points × network health</em>. Leaving lots of patches Unsustained tanks your multiplier.</li>
         </ul>
 
         <h3>Controls</h3>
@@ -1154,6 +1228,23 @@ export default function Mycelium() {
           margin: 0;
           line-height: 1;
           text-shadow: 0 0 30px rgba(232, 196, 107, 0.2);
+          display: inline-flex;
+          align-items: baseline;
+          gap: 10px;
+        }
+        .version-tag {
+          font-family: 'JetBrains Mono', monospace;
+          font-style: normal;
+          font-weight: 400;
+          font-size: 10px;
+          letter-spacing: 0.18em;
+          color: #7a6f5e;
+          text-shadow: none;
+          padding: 2px 6px;
+          border: 1px solid #2a241e;
+          border-radius: 2px;
+          text-transform: lowercase;
+          align-self: center;
         }
         .subtitle {
           font-family: 'JetBrains Mono', monospace;
@@ -1276,6 +1367,12 @@ export default function Mycelium() {
           font-size: 8px;
           color: #7a6f5e;
           margin-left: 4px;
+        }
+        .pm-mult {
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 9px;
+          margin-right: 1px;
+          opacity: 0.85;
         }
 
         .modal-backdrop {
@@ -1525,7 +1622,7 @@ export default function Mycelium() {
           font-style: italic;
           font-weight: 600;
         }
-        .tier-badge[data-tier="0"] { color: #6a5f4e; }
+        .tier-badge[data-tier="0"] { color: #d48a7a; }
         .tier-badge[data-tier="1"] { color: #7a9c6a; }
         .tier-badge[data-tier="2"] { color: #9ec48a; }
         .tier-badge[data-tier="3"] { color: #e8c46b; }
@@ -1559,18 +1656,22 @@ export default function Mycelium() {
           margin-bottom: 12px;
         }
         .species-grid {
-          display: grid;
-          gap: 8px;
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
         }
         .species-card {
-          text-align: left;
           background: #14100c;
           border: 1px solid #2a241e;
-          padding: 10px 12px;
+          padding: 5px 9px;
           cursor: pointer;
           color: #d8cfbf;
           font-family: 'Cormorant Garamond', serif;
-          transition: all 0.15s;
+          transition: all 0.12s;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          text-align: left;
         }
         .species-card:hover:not(:disabled) {
           border-color: #e8c46b;
@@ -1578,24 +1679,49 @@ export default function Mycelium() {
         }
         .species-card:disabled { opacity: 0.4; cursor: not-allowed; }
         .species-name {
-          font-size: 16px;
+          flex: 1;
+          font-size: 14px;
           font-style: italic;
           color: #e8c46b;
+          line-height: 1.2;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .species-role {
+          font-family: 'JetBrains Mono', monospace;
+          font-style: normal;
+          font-size: 8px;
+          letter-spacing: 0.15em;
+          color: #6a5f4e;
+          text-transform: uppercase;
+          width: 12px;
+          text-align: center;
         }
         .species-flow {
-          display: flex; align-items: center; gap: 6px;
-          margin-top: 4px;
-          font-size: 12px;
+          display: inline-flex;
+          align-items: center;
+          gap: 2px;
+          font-size: 11px;
           color: #8a7f6e;
+          flex-shrink: 0;
         }
-        .arrow { color: #5a4f42; }
-        .species-cost {
+        .species-flow .arrow { color: #5a4f42; margin: 0 2px; }
+        .species-mult {
           font-family: 'JetBrains Mono', monospace;
           font-size: 9px;
-          letter-spacing: 0.2em;
+          color: #8a7f6e;
+          margin-right: 1px;
+        }
+        .species-cost {
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 8px;
+          letter-spacing: 0.15em;
           text-transform: uppercase;
           color: #6a5f4e;
-          margin-top: 4px;
+          flex-shrink: 0;
+          width: 28px;
+          text-align: right;
         }
 
         .legend {
@@ -1664,7 +1790,10 @@ export default function Mycelium() {
       <div className="container">
         <header>
           <div>
-            <h1 className="title">Mycelium</h1>
+            <h1 className="title">
+              Mycelium
+              <span className="version-tag">v{VERSION}</span>
+            </h1>
             <div className="subtitle">a network of patient threads · year {state.year} of {state.maxYears}</div>
           </div>
           <div className="stats-bar">
@@ -1793,37 +1922,14 @@ export default function Mycelium() {
                 </div>
                 <button className="btn primary" onClick={newGame}>New forest</button>
               </div>
-            ) : state.selectedNode !== null && state.map.nodes[state.selectedNode].species ? (
+            ) : state.selectedNode !== null ? (
               <NodePanel
                 state={state}
                 setState={setState}
                 net={net}
                 onClose={() => setState(st => ({ ...st, selectedNode: null }))}
               />
-            ) : (
-              <div className="panel">
-                <div className="panel-head">
-                  <div>
-                    <div className="panel-eyebrow">field guide</div>
-                    <div className="panel-title">Resources</div>
-                  </div>
-                </div>
-                <div className="legend">
-                  {Object.entries(RESOURCES).map(([key, r]) => (
-                    <div key={key} className="legend-row">
-                      <span>
-                        <span style={{ color: r.color, fontSize: 16, marginRight: 8 }}>{r.glyph}</span>
-                        {r.name}
-                      </span>
-                      <span>{key}</span>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ marginTop: 14, fontStyle: 'italic', color: '#8a7f6e', fontSize: 13, lineHeight: 1.5 }}>
-                  Cultivate species on patches. Weave hyphae between them. A thread carries one resource each way — only what one side produces and the other side needs.
-                </div>
-              </div>
-            )}
+            ) : null}
 
             <div className="panel">
               <div className="panel-head">
